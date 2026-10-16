@@ -76,6 +76,49 @@ impl Harness {
     }
 
     /// Stops the daemon but keeps the home and fakes, for simulating changes between runs.
+    /// Scripts a successful device flow for `login` and waits until the daemon is connected.
+    pub async fn connect_github(&self, login: &str) -> anyhow::Result<()> {
+        use axum::http::{Method, StatusCode};
+        use serde_json::json;
+        self.github.route(
+            Method::POST,
+            "/login/device/code",
+            StatusCode::OK,
+            json!({
+                "device_code": "dev-123",
+                "user_code": "ABCD-1234",
+                "verification_uri": "https://github.com/login/device",
+                "expires_in": 900,
+                "interval": 0
+            }),
+        );
+        self.github.route(
+            Method::POST,
+            "/login/oauth/access_token",
+            StatusCode::OK,
+            json!({ "access_token": "gho_test", "token_type": "bearer" }),
+        );
+        self.github.route(
+            Method::GET,
+            "/user",
+            StatusCode::OK,
+            json!({ "login": login, "name": null }),
+        );
+        let client = self.client();
+        client.start_login().await?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let prowld::AuthState::Connected { .. } = client.auth_state().await? {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "GitHub login did not complete"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     pub async fn shutdown_daemon_only(&mut self) -> anyhow::Result<()> {
         if let Some(daemon) = self.daemon.take() {
             daemon.shutdown().await?;

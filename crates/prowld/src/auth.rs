@@ -115,7 +115,6 @@ impl Auth {
     }
 
     /// The stored token, if the account is usable.
-    #[allow(dead_code)] // used by the poller (ticket 04)
     pub(crate) async fn token(&self) -> Option<String> {
         match *self.inner.state.lock().await {
             AuthState::Connected { .. } => self.inner.credentials.get().await.ok().flatten(),

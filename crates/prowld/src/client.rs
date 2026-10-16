@@ -13,6 +13,7 @@ use serde::de::DeserializeOwned;
 use crate::auth::AuthState;
 use crate::events::Event;
 use crate::policy::{EffectivePolicy, PolicyVersion, Scope};
+use crate::repos::{Repo, RepoPage, RepoQuery};
 use crate::server::Status;
 use crate::transport::{self, Endpoint};
 
@@ -120,6 +121,39 @@ impl ApiClient {
         self.call_json(Method::POST, &path).await
     }
 
+    /// Repositories the connected account can see, filtered and paginated.
+    pub async fn repos(&self, query: &RepoQuery) -> Result<RepoPage, ClientError> {
+        let mut params = Vec::new();
+        if let Some(q) = &query.q {
+            params.push(format!("q={}", percent_encode(q)));
+        }
+        if let Some(page) = query.page {
+            params.push(format!("page={page}"));
+        }
+        if let Some(per_page) = query.per_page {
+            params.push(format!("per_page={per_page}"));
+        }
+        if query.refresh {
+            params.push("refresh=true".into());
+        }
+        self.get_json(&format!("/v1/repos?{}", params.join("&")))
+            .await
+    }
+
+    pub async fn watched_repos(&self) -> Result<Vec<Repo>, ClientError> {
+        self.get_json("/v1/repos/watched").await
+    }
+
+    pub async fn watch(&self, full_name: &str) -> Result<Repo, ClientError> {
+        self.call_json(Method::PUT, &format!("/v1/repos/{full_name}/watch"))
+            .await
+    }
+
+    pub async fn unwatch(&self, full_name: &str) -> Result<Repo, ClientError> {
+        self.call_json(Method::DELETE, &format!("/v1/repos/{full_name}/watch"))
+            .await
+    }
+
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
         self.call_json(Method::GET, path).await
     }
@@ -207,6 +241,19 @@ impl ApiClient {
             .expect("static request parts are valid");
         Ok(sender.send_request(request).await?)
     }
+}
+
+/// Percent-encodes a query-string value.
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 fn policy_path(scope: &Scope) -> String {

@@ -45,6 +45,26 @@ pub(crate) enum TokenPoll {
     Failed(String),
 }
 
+/// A repository as GitHub's REST API returns it (the fields PRowl uses).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ApiRepo {
+    pub id: i64,
+    pub full_name: String,
+    pub name: String,
+    pub owner: ApiOwner,
+    pub private: bool,
+    pub archived: bool,
+    pub default_branch: String,
+    pub html_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ApiOwner {
+    pub login: String,
+}
+
+const PER_PAGE: usize = 100;
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct User {
     pub login: String,
@@ -114,9 +134,62 @@ impl GitHub {
     }
 
     pub(crate) async fn current_user(&self, token: &str) -> Result<User, GitHubError> {
+        self.get_json(token, "/user", &[]).await
+    }
+
+    /// Every repository the account owns, collaborates on, or can see through an organisation.
+    pub(crate) async fn list_repos(&self, token: &str) -> Result<Vec<ApiRepo>, GitHubError> {
+        let mut repos = Vec::new();
+        for page in 1.. {
+            let page = page.to_string();
+            let batch: Vec<ApiRepo> = self
+                .get_json(
+                    token,
+                    "/user/repos",
+                    &[
+                        ("affiliation", "owner,collaborator,organization_member"),
+                        ("sort", "full_name"),
+                        ("per_page", &PER_PAGE.to_string()),
+                        ("page", &page),
+                    ],
+                )
+                .await?;
+            let last = batch.len() < PER_PAGE;
+            repos.extend(batch);
+            if last {
+                break;
+            }
+        }
+        Ok(repos)
+    }
+
+    /// One repository, or `None` if it doesn't exist or the account can't see it.
+    pub(crate) async fn get_repo(
+        &self,
+        token: &str,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Option<ApiRepo>, GitHubError> {
+        match self
+            .get_json(token, &format!("/repos/{owner}/{repo}"), &[])
+            .await
+        {
+            Ok(repo) => Ok(Some(repo)),
+            Err(GitHubError::Status { status, .. }) if status == StatusCode::NOT_FOUND => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn get_json<T: serde::de::DeserializeOwned>(
+        &self,
+        token: &str,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<T, GitHubError> {
         let response = self
             .http
-            .get(format!("{}/user", self.api_url))
+            .get(format!("{}{path}", self.api_url))
+            .query(query)
             .header(header::ACCEPT, "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .bearer_auth(token)
