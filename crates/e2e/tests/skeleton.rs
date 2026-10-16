@@ -148,3 +148,26 @@ async fn http_get(url: &str) -> serde_json::Value {
     let body = response.split_once("\r\n\r\n").unwrap().1;
     serde_json::from_str(body).unwrap()
 }
+
+#[tokio::test]
+async fn daemon_serves_from_a_very_long_home_path() {
+    let base = tempfile::tempdir().unwrap();
+    let home = base.path().join("a-really-long-directory-name".repeat(6));
+    let mut config = prowld::Config::new(&home);
+    config.credentials = prowld::CredentialBackend::File;
+
+    let daemon = prowld::start(config).await.unwrap();
+
+    assert!(
+        daemon.endpoint().as_str().len() <= 100,
+        "{}",
+        daemon.endpoint()
+    );
+    let status = prowld::ApiClient::for_home(&home)
+        .unwrap()
+        .status()
+        .await
+        .unwrap();
+    assert_eq!(status.pid, std::process::id());
+    daemon.shutdown().await.unwrap();
+}

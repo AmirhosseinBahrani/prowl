@@ -1742,6 +1742,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "keyring",
+ "libc",
  "rand 0.9.5",
  "reqwest",
  "serde",

@@ -10,6 +10,7 @@ mod github;
 pub mod policy;
 mod policy_api;
 mod server;
+pub mod service;
 mod store;
 pub mod transport;
 
