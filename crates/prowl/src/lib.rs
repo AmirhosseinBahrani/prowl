@@ -11,6 +11,8 @@ pub(crate) mod policy_ui;
 pub mod queue_tab;
 mod queue_ui;
 pub mod runtime;
+pub mod settings_tab;
+mod settings_ui;
 pub mod ui;
 
 pub use runtime::{Editor, Opener, Options, run};

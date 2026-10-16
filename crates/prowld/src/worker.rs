@@ -4,12 +4,11 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::Auth;
 use crate::claude::{Claude, ClaudeError};
-use crate::decider::{self, Decision, DecisionSettings};
+use crate::decider::{self, Decision};
 use crate::events::EventBus;
 use crate::github::{GitHub, GitHubError, PullRequest};
 use crate::jobs::{Job, Jobs};
@@ -21,6 +20,7 @@ use crate::publish::{self, Target};
 use crate::queue::Queue;
 use crate::review::{self, ReviewOutput};
 use crate::reviews::{NewReview, Reviews};
+use crate::settings::SettingsStore;
 use crate::workspace::{Checkout, Workspace};
 
 const TICK: Duration = Duration::from_millis(250);
@@ -57,14 +57,12 @@ struct Inner {
     github: GitHub,
     queue: Queue,
     publications: Publications,
-    decision: DecisionSettings,
+    settings: SettingsStore,
     retry: RetrySettings,
-    limits: Limits,
-    /// UTC day (ms at midnight) for which `budget.reached` was announced.
+    /// Budget day (its start, Unix ms) for which `budget.reached` was announced.
     budget_reported: std::sync::Mutex<Option<i64>>,
     /// Reviews running right now, read by the power manager.
     active: Arc<std::sync::atomic::AtomicUsize>,
-    slots: Arc<Semaphore>,
 }
 
 pub(crate) struct WorkerParts {
@@ -79,18 +77,15 @@ pub(crate) struct WorkerParts {
     pub github: GitHub,
     pub queue: Queue,
     pub publications: Publications,
-    pub decision: DecisionSettings,
+    pub settings: SettingsStore,
     pub retry: RetrySettings,
-    pub limits: Limits,
     pub active: Arc<std::sync::atomic::AtomicUsize>,
-    pub concurrency: usize,
 }
 
 impl Worker {
     pub(crate) fn new(parts: WorkerParts) -> Self {
         Self {
             inner: Arc::new(Inner {
-                slots: Arc::new(Semaphore::new(parts.concurrency.max(1))),
                 jobs: parts.jobs,
                 reviews: parts.reviews,
                 poller: parts.poller,
@@ -102,9 +97,8 @@ impl Worker {
                 github: parts.github,
                 queue: parts.queue,
                 publications: parts.publications,
-                decision: parts.decision,
+                settings: parts.settings,
                 retry: parts.retry,
-                limits: parts.limits,
                 budget_reported: std::sync::Mutex::new(None),
                 active: parts.active,
             }),
@@ -121,7 +115,10 @@ impl Worker {
                     _ = tick.tick() => {}
                     () = shutdown.cancelled() => return,
                 }
-                while let Ok(slot) = this.inner.slots.clone().try_acquire_owned() {
+                // The limit is read live, so a settings change applies at the next claim.
+                while this.inner.active.load(std::sync::atomic::Ordering::SeqCst)
+                    < this.inner.settings.get().review_concurrency
+                {
                     let job = match this.inner.jobs.claim_next().await {
                         Ok(Some(job)) => job,
                         Ok(None) => break,
@@ -130,18 +127,17 @@ impl Worker {
                             break;
                         }
                     };
+                    let active = this.inner.active.clone();
+                    active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let this = this.clone();
                     let shutdown = shutdown.clone();
                     tokio::spawn(async move {
-                        let active = this.inner.active.clone();
-                        active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         tokio::select! {
                             () = this.run(&job) => {}
                             // Left as `running`; marked interrupted and retried on next start.
                             () = shutdown.cancelled() => {}
                         }
                         active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                        drop(slot);
                     });
                 }
             }
@@ -251,9 +247,10 @@ impl Worker {
                     .await;
             }
         }
+        let settings = inner.settings.get();
         let changed_lines = pr.additions + pr.deletions;
-        if changed_lines > inner.limits.max_changed_lines
-            || pr.changed_files > inner.limits.max_changed_files
+        if changed_lines > settings.max_changed_lines
+            || pr.changed_files > settings.max_changed_files
         {
             return self
                 .too_large(job, &token, &reviewer, changed_lines, pr.changed_files)
@@ -262,6 +259,9 @@ impl Worker {
         let Some(budget_left) = self.budget_left(job).await? else {
             return Ok(());
         };
+        let file_rule = self
+            .file_rule(&settings, &job.repo, job.pr_number, &token)
+            .await?;
 
         if let Err(e) = inner.claude.locate() {
             self.emit(
@@ -309,11 +309,18 @@ impl Worker {
         self.emit(kind::FINISHED, job, details).await;
 
         let rule_ids: Vec<String> = policy.rules.iter().map(|r| r.id.clone()).collect();
-        let verdict = decider::decide(
+        let mut verdict = decider::decide(
             output.as_ref().map_err(String::as_str),
             &rule_ids,
-            inner.decision,
+            decider::DecisionSettings {
+                risk_threshold: settings.risk_threshold,
+            },
         );
+        // File-pattern rules only escalate.
+        if let Some(rule) = file_rule {
+            verdict.decision = Decision::NeedsHuman;
+            verdict.reasons.insert(0, rule);
+        }
         inner
             .reviews
             .set_decision(review_id, verdict.decision, &verdict.reasons)
@@ -408,6 +415,34 @@ impl Worker {
         })
     }
 
+    /// The safety rule a changed file matches, if the repository has file rules.
+    async fn file_rule(
+        &self,
+        settings: &crate::settings::Settings,
+        repo: &str,
+        number: u64,
+        token: &str,
+    ) -> anyhow::Result<Option<decider::Reason>> {
+        if !settings
+            .file_rules
+            .keys()
+            .any(|r| r.eq_ignore_ascii_case(repo))
+        {
+            return Ok(None);
+        }
+        let files: Vec<String> = self
+            .inner
+            .github
+            .pull_files(token, repo, number)
+            .await?
+            .into_iter()
+            .map(|f| f.filename)
+            .collect();
+        Ok(settings
+            .matching_rule(repo, &files)
+            .map(|(pattern, file)| decider::Reason::FilePattern { pattern, file }))
+    }
+
     /// Reviews a PR exactly like a real run — same policy, prompt, checks and decision — but
     /// posts nothing to GitHub and touches no queue. Its cost counts against the budget.
     pub(crate) async fn dry_run(&self, repo: &str, number: u64) -> anyhow::Result<DryRun> {
@@ -437,9 +472,10 @@ impl Worker {
             error: None,
             created_at_ms: crate::events::now_ms(),
         };
+        let settings = inner.settings.get();
         let changed_lines = pr.additions + pr.deletions;
-        if changed_lines > inner.limits.max_changed_lines
-            || pr.changed_files > inner.limits.max_changed_files
+        if changed_lines > settings.max_changed_lines
+            || pr.changed_files > settings.max_changed_files
         {
             let policy = inner
                 .policies
@@ -450,8 +486,8 @@ impl Worker {
                 reasons: vec![decider::Reason::TooLarge {
                     changed_lines,
                     changed_files: pr.changed_files,
-                    max_lines: inner.limits.max_changed_lines,
-                    max_files: inner.limits.max_changed_files,
+                    max_lines: settings.max_changed_lines,
+                    max_files: settings.max_changed_files,
                 }],
                 review: None,
                 invalid_reason: Some("too large for an agent review".into()),
@@ -460,12 +496,12 @@ impl Worker {
                 policy_version_id: policy.version_id,
             });
         }
-        let budget = match inner.limits.daily_budget_usd {
+        let budget = match settings.daily_budget_usd {
             None => None,
             Some(cap) => {
                 let (spent, _) = inner
                     .reviews
-                    .spent_since(utc_midnight_ms(crate::events::now_ms()))
+                    .spent_since(settings.day_start_ms(crate::events::now_ms()))
                     .await?;
                 anyhow::ensure!(spent < cap, "today's Claude budget is used up");
                 Some(cap - spent)
@@ -477,11 +513,17 @@ impl Worker {
             .await?;
         inner.reviews.record_dry_run(repo, number, run.cost).await?;
         let rule_ids: Vec<String> = run.policy.rules.iter().map(|r| r.id.clone()).collect();
-        let verdict = decider::decide(
+        let mut verdict = decider::decide(
             run.output.as_ref().map_err(String::as_str),
             &rule_ids,
-            inner.decision,
+            decider::DecisionSettings {
+                risk_threshold: settings.risk_threshold,
+            },
         );
+        if let Some(rule) = self.file_rule(&settings, repo, number, &token).await? {
+            verdict.decision = Decision::NeedsHuman;
+            verdict.reasons.insert(0, rule);
+        }
         Ok(DryRun {
             decision: verdict.decision,
             reasons: verdict.reasons,
@@ -503,6 +545,7 @@ impl Worker {
         changed_files: u64,
     ) -> anyhow::Result<()> {
         let inner = &self.inner;
+        let settings = inner.settings.get();
         let policy = inner
             .policies
             .effective(Some(&Scope::parse_repo(&job.repo)?))
@@ -525,8 +568,8 @@ impl Worker {
             reasons: vec![decider::Reason::TooLarge {
                 changed_lines,
                 changed_files,
-                max_lines: inner.limits.max_changed_lines,
-                max_files: inner.limits.max_changed_files,
+                max_lines: settings.max_changed_lines,
+                max_files: settings.max_changed_files,
             }],
         };
         inner
@@ -561,15 +604,17 @@ impl Worker {
     /// `None` when it is used up (the job then waits for tomorrow, UTC).
     async fn budget_left(&self, job: &Job) -> anyhow::Result<Option<Option<f64>>> {
         let inner = &self.inner;
-        let Some(cap) = inner.limits.daily_budget_usd else {
+        let settings = inner.settings.get();
+        let Some(cap) = settings.daily_budget_usd else {
             return Ok(Some(None));
         };
-        let day = utc_midnight_ms(crate::events::now_ms());
+        let day = settings.day_start_ms(crate::events::now_ms());
         let (spent, _) = inner.reviews.spent_since(day).await?;
         if spent < cap {
             return Ok(Some(Some(cap - spent)));
         }
-        let tomorrow = day + DAY_MS;
+        // The next day's start (computed, not +24h, so local days across DST changes work).
+        let tomorrow = settings.day_start_ms(day + DAY_MS + 3_600_000);
         let wait = Duration::from_millis((tomorrow - crate::events::now_ms()).max(0) as u64);
         inner
             .jobs
@@ -731,6 +776,15 @@ impl Worker {
                 }
             })
         };
+        let settings = self.inner.settings.get();
+        let options = crate::claude::RunOptions {
+            model: settings.claude_model.clone(),
+            timeout: settings.review_timeout(),
+            max_budget_usd: match (settings.review_budget_usd, budget) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            },
+        };
         let result = self
             .inner
             .claude
@@ -739,7 +793,7 @@ impl Worker {
                 &checkout.material,
                 prompt,
                 resume,
-                budget,
+                &options,
                 |text| {
                     let _ = tx.send(text.to_owned());
                 },
@@ -762,10 +816,6 @@ impl Worker {
 
 const DAY_MS: i64 = 86_400_000;
 
-pub(crate) fn utc_midnight_ms(now_ms: i64) -> i64 {
-    now_ms - now_ms.rem_euclid(DAY_MS)
-}
-
 /// What a run of Claude produced, before anything is stored or published.
 struct ClaudeRun {
     policy: crate::policy::EffectivePolicy,
@@ -785,16 +835,6 @@ pub struct DryRun {
     pub cost_usd: Option<f64>,
     pub policy_scope: String,
     pub policy_version_id: i64,
-}
-
-/// Spending and size limits.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Limits {
-    /// Total Claude spend per UTC day; no new reviews start once reached.
-    pub daily_budget_usd: Option<f64>,
-    /// Added + deleted lines above which a PR goes to a human without a Claude run.
-    pub max_changed_lines: u64,
-    pub max_changed_files: u64,
 }
 
 /// How failed reviews are retried.

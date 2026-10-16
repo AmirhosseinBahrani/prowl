@@ -235,6 +235,7 @@ pub fn reason_text(reason: &Reason) -> String {
         Reason::RiskScore { score, threshold } => {
             format!("risk score {score} (threshold {threshold})")
         }
+        Reason::FilePattern { pattern, file } => format!("changes {file} (safety rule {pattern})"),
         Reason::TooLarge {
             changed_lines,
             changed_files,

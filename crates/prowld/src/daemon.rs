@@ -11,21 +11,21 @@ use crate::claude::{Claude, ClaudeSettings};
 use crate::client::ApiClient;
 use crate::config::{self, Config};
 use crate::credentials::CredentialStore;
-use crate::decider::DecisionSettings;
 use crate::events::{self, EventBus};
 use crate::github::GitHub;
 use crate::jobs::Jobs;
 use crate::policy::PolicyStore;
-use crate::poller::{PollSettings, Poller};
+use crate::poller::Poller;
 use crate::power::{Power, PowerSettings};
 use crate::publications::Publications;
 use crate::queue::Queue;
 use crate::repos::Repos;
 use crate::reviews::Reviews;
 use crate::server::{self, AppState};
+use crate::settings::{Settings, SettingsStore};
 use crate::store;
 use crate::transport::{self, Endpoint};
-use crate::worker::{Limits, RetrySettings, Worker, WorkerParts};
+use crate::worker::{RetrySettings, Worker, WorkerParts};
 use crate::workspace::Workspace;
 
 /// A daemon running inside the current process.
@@ -74,6 +74,9 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         .await
         .context("opening database")?;
     let events = EventBus::new(db.clone());
+    let settings = SettingsStore::open(db.clone(), events.clone(), Settings::from_config(&config))
+        .await
+        .context("loading settings")?;
 
     let endpoint = Endpoint::for_home(&config.home);
     let listener = transport::bind(&endpoint)
@@ -112,12 +115,9 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         jobs.clone(),
         events.clone(),
         queue.clone(),
-        PollSettings {
-            include_team_requests: config.include_team_requests,
-            skip_drafts: config.skip_drafts,
-        },
+        settings.clone(),
     );
-    poller.spawn(config.poll_interval, shutdown.clone());
+    poller.spawn(shutdown.clone());
 
     // Anything left running by a crash or shutdown goes back in the queue, with a clean checkout.
     let interrupted = jobs.mark_interrupted().await?;
@@ -137,7 +137,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
             .clone()
             .map(|hook| hook.0)
             .unwrap_or_else(crate::power::platform_backend),
-        config.sleep_mode,
+        settings.clone(),
         events.clone(),
         active_reviews.clone(),
     );
@@ -161,31 +161,22 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         github: github.clone(),
         queue: queue.clone(),
         publications: Publications::new(db.clone()),
-        decision: DecisionSettings {
-            risk_threshold: config.risk_threshold,
-        },
+        settings: settings.clone(),
         retry: RetrySettings {
             base: config.retry_base,
             max_attempts: config.max_attempts,
         },
-        limits: Limits {
-            daily_budget_usd: config.daily_budget_usd,
-            max_changed_lines: config.max_changed_lines,
-            max_changed_files: config.max_changed_files,
-        },
+
         active: active_reviews,
-        concurrency: config.review_concurrency,
     });
     worker.spawn(shutdown.clone());
 
-    if config.notifications {
-        let notifier = config
-            .notifier
-            .clone()
-            .map(|hook| hook.0)
-            .unwrap_or_else(|| Arc::new(crate::notify::Desktop));
-        crate::notify::spawn(&events, notifier, shutdown.clone());
-    }
+    let notifier = config
+        .notifier
+        .clone()
+        .map(|hook| hook.0)
+        .unwrap_or_else(|| Arc::new(crate::notify::Desktop));
+    crate::notify::spawn(&events, notifier, settings.clone(), shutdown.clone());
 
     let state = AppState {
         auth: auth.clone(),
@@ -193,7 +184,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         repos,
         jobs,
         reviews,
-        daily_budget_usd: config.daily_budget_usd,
+        settings,
         power,
         claude: std::sync::Arc::new(claude_for(&config)),
         claude_env: config.claude_env.clone(),
@@ -277,8 +268,5 @@ fn claude_for(config: &Config) -> Claude {
     Claude::new(ClaudeSettings {
         bin: config.claude_bin.clone(),
         env: config.claude_env.clone(),
-        model: config.claude_model.clone(),
-        timeout: config.review_timeout,
-        max_budget_usd: config.review_budget_usd,
     })
 }

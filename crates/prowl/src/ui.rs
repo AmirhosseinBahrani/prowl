@@ -4,7 +4,7 @@ use prowld::AuthState;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
-use ratatui::text::{Line, Span, Text};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap};
 
 use crate::app::{App, PER_PAGE, Screen, Tab};
@@ -309,17 +309,8 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
         Tab::Policy => crate::policy_ui::draw(&app.policy, frame, inner),
         Tab::Feed => crate::feed_ui::draw_feed(&app.feed, frame, inner),
         Tab::Queue => crate::queue_ui::draw(&app.queue, frame, inner),
+        Tab::Settings => crate::settings_ui::draw(&app.settings, frame, inner),
         Tab::History => crate::feed_ui::draw_history(&app.history, &app.status, frame, inner),
-        other => {
-            let what = match other {
-                Tab::Settings => "settings",
-                Tab::Repos | Tab::Policy | Tab::Feed | Tab::History | Tab::Queue => unreachable!(),
-            };
-            frame.render_widget(
-                Paragraph::new(Text::from(format!("  Coming soon: {what}."))).dim(),
-                inner,
-            );
-        }
     }
 }
 

@@ -216,6 +216,19 @@ impl ApiClient {
             .await
     }
 
+    pub async fn settings(&self) -> Result<crate::settings::Settings, ClientError> {
+        self.get_json("/v1/settings").await
+    }
+
+    /// Changes the given settings (a JSON object with any subset of fields).
+    pub async fn update_settings(
+        &self,
+        patch: serde_json::Value,
+    ) -> Result<crate::settings::Settings, ClientError> {
+        self.call_json_body(Method::PUT, "/v1/settings", Some(patch))
+            .await
+    }
+
     /// Today's Claude spend against the daily budget.
     pub async fn costs(&self) -> Result<Costs, ClientError> {
         self.get_json("/v1/costs").await

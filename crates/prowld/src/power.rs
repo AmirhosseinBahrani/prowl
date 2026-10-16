@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::events::{self, EventBus};
 use crate::poller::Poller;
+use crate::settings::SettingsStore;
 
 pub mod kind {
     pub const HELD: &str = "power.awake_held";
@@ -77,7 +78,7 @@ pub(crate) struct Power {
 
 struct Inner {
     backend: Arc<dyn PowerBackend>,
-    mode: SleepMode,
+    settings: SettingsStore,
     events: EventBus,
     /// Reviews currently running (maintained by the worker).
     active: Arc<AtomicUsize>,
@@ -93,19 +94,14 @@ pub(crate) struct PowerSettings {
 impl Power {
     pub(crate) fn new(
         backend: Arc<dyn PowerBackend>,
-        mode: Option<SleepMode>,
+        settings: SettingsStore,
         events: EventBus,
         active: Arc<AtomicUsize>,
     ) -> Self {
-        let mode = mode.unwrap_or(if backend.has_battery() {
-            SleepMode::AcOnly
-        } else {
-            SleepMode::Always
-        });
         Self {
             inner: Arc::new(Inner {
                 backend,
-                mode,
+                settings,
                 events,
                 active,
                 holding: std::sync::Mutex::new(false),
@@ -113,9 +109,22 @@ impl Power {
         }
     }
 
+    /// The configured mode, or the default for this machine (`ac_only` with a battery).
+    fn mode(&self) -> SleepMode {
+        self.inner
+            .settings
+            .get()
+            .sleep_mode
+            .unwrap_or(if self.inner.backend.has_battery() {
+                SleepMode::AcOnly
+            } else {
+                SleepMode::Always
+            })
+    }
+
     pub(crate) fn status(&self) -> PowerStatus {
         PowerStatus {
-            mode: self.inner.mode,
+            mode: self.mode(),
             holding: *self.inner.holding.lock().unwrap(),
             on_ac_power: self.inner.backend.on_ac_power(),
             has_battery: self.inner.backend.has_battery(),
@@ -185,7 +194,7 @@ impl Power {
 
     /// Holds or releases the sleep assertion to match the mode and current state.
     async fn apply(&self) -> anyhow::Result<()> {
-        let (want, reason) = match self.inner.mode {
+        let (want, reason) = match self.mode() {
             SleepMode::Always => (true, "always"),
             SleepMode::AcOnly => match self.inner.backend.on_ac_power() {
                 Some(false) => (false, "on_battery"),
@@ -223,7 +232,7 @@ impl Power {
                 .events
                 .emit(
                     if want { kind::HELD } else { kind::RELEASED },
-                    serde_json::json!({ "mode": self.inner.mode, "reason": reason }),
+                    serde_json::json!({ "mode": self.mode(), "reason": reason }),
                 )
                 .await;
         }

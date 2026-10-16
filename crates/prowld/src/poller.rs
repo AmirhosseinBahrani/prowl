@@ -3,7 +3,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -17,6 +16,7 @@ use crate::jobs::Job;
 use crate::jobs::{Jobs, NewJob};
 use crate::queue::Queue;
 use crate::repos::Repos;
+use crate::settings::SettingsStore;
 
 pub mod kind {
     pub const COMPLETED: &str = "poll.completed";
@@ -24,12 +24,6 @@ pub mod kind {
     pub const RATE_LIMITED: &str = "poll.rate_limited";
     pub const ENQUEUED: &str = "pr.enqueued";
     pub const GATED_OUT: &str = "pr.gated_out";
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct PollSettings {
-    pub include_team_requests: bool,
-    pub skip_drafts: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,7 +74,7 @@ struct Inner {
     jobs: Jobs,
     events: EventBus,
     queue: Queue,
-    settings: PollSettings,
+    settings: SettingsStore,
     /// Held for the duration of a poll so scheduled and on-demand polls never overlap.
     running: Mutex<()>,
     /// Last gate decision per PR, so a PR that stays gated out is reported once, not every poll.
@@ -96,7 +90,7 @@ impl Poller {
         jobs: Jobs,
         events: EventBus,
         queue: Queue,
-        settings: PollSettings,
+        settings: SettingsStore,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -115,14 +109,29 @@ impl Poller {
     }
 
     /// Polls every `every`, skipping (not bursting) ticks missed while busy or asleep.
-    pub(crate) fn spawn(&self, every: Duration, shutdown: CancellationToken) {
+    /// Polls on the interval from the settings, picking up changes to it as they happen.
+    pub(crate) fn spawn(&self, shutdown: CancellationToken) {
         let this = self.clone();
+        let mut changes = self.inner.settings.subscribe();
         tokio::spawn(async move {
+            let mut every = this.inner.settings.get().poll_interval();
             let mut tick = tokio::time::interval(every);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
                     _ = tick.tick() => {}
+                    changed = changes.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                        let now = changes.borrow_and_update().poll_interval();
+                        if now != every {
+                            every = now;
+                            tick = tokio::time::interval_at(tokio::time::Instant::now() + every, every);
+                            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                        }
+                        continue;
+                    }
                     () = shutdown.cancelled() => return,
                 }
                 this.poll_once().await;
@@ -191,7 +200,7 @@ impl Poller {
             return Ok(skipped("rate_limited"));
         }
 
-        let settings = self.inner.settings;
+        let settings = self.inner.settings.get();
         let found = match self
             .inner
             .github
@@ -274,8 +283,8 @@ impl Poller {
         let ctx = GateContext {
             me,
             my_teams,
-            include_team_requests: self.inner.settings.include_team_requests,
-            skip_drafts: self.inner.settings.skip_drafts,
+            include_team_requests: self.inner.settings.get().include_team_requests,
+            skip_drafts: self.inner.settings.get().skip_drafts,
             repo_watched,
             already_queued,
         };
@@ -329,7 +338,7 @@ impl Poller {
         let AuthState::Connected { login, .. } = self.inner.auth.state().await else {
             return Ok(Recheck::Cancel("not_connected".into()));
         };
-        let settings = self.inner.settings;
+        let settings = self.inner.settings.get();
         let my_teams: Vec<(String, String)> = if settings.include_team_requests {
             self.inner
                 .github

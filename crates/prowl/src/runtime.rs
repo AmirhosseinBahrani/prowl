@@ -185,6 +185,10 @@ fn execute(
             }
             Cmd::LoadReviews => Msg::Reviews(client.reviews(None).await.map_err(err)),
             Cmd::LoadQueue => Msg::QueueItems(client.queue().await.map_err(err)),
+            Cmd::LoadSettings => Msg::Settings(client.settings().await.map_err(err)),
+            Cmd::SaveSettings { patch } => {
+                Msg::SettingsSaved(client.update_settings(patch).await.map_err(err))
+            }
             Cmd::LoadQueueItem { repo, number } => {
                 Msg::QueueDetail(client.queue_item(&repo, number).await.map_err(err))
             }

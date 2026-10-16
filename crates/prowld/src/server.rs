@@ -30,7 +30,7 @@ pub(crate) struct AppState {
     pub repos: Repos,
     pub jobs: Jobs,
     pub reviews: Reviews,
-    pub daily_budget_usd: Option<f64>,
+    pub settings: crate::settings::SettingsStore,
     pub power: Power,
     pub claude: std::sync::Arc<crate::claude::Claude>,
     pub claude_env: Vec<(String, String)>,
@@ -65,6 +65,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/reviews", get(list_reviews))
         .route("/v1/power", get(power_status))
         .route("/v1/costs", get(costs))
+        .route("/v1/settings", get(get_settings).put(put_settings))
         .route("/v1/doctor", get(doctor))
         .route("/v1/dry-run", post(dry_run))
         .merge(crate::policy_api::routes())
@@ -137,8 +138,28 @@ pub struct Costs {
     pub resets_at_ms: i64,
 }
 
+async fn get_settings(State(state): State<AppState>) -> Json<crate::settings::Settings> {
+    Json(state.settings.get())
+}
+
+/// Changes any subset of the settings; they apply without a restart.
+async fn put_settings(
+    State(state): State<AppState>,
+    Json(patch): Json<serde_json::Value>,
+) -> Result<Json<crate::settings::Settings>, ApiError> {
+    use crate::settings::SettingsError;
+    match state.settings.update(&patch).await {
+        Ok(settings) => Ok(Json(settings)),
+        Err(SettingsError::Invalid(message)) => {
+            Err(ApiError(StatusCode::UNPROCESSABLE_ENTITY, message))
+        }
+        Err(SettingsError::Internal(e)) => Err(ApiError::internal(e)),
+    }
+}
+
 async fn costs(State(state): State<AppState>) -> Result<Json<Costs>, ApiError> {
-    let day = crate::worker::utc_midnight_ms(crate::events::now_ms());
+    let settings = state.settings.get();
+    let day = settings.day_start_ms(crate::events::now_ms());
     let (today_usd, reviews_today) = state
         .reviews
         .spent_since(day)
@@ -147,8 +168,8 @@ async fn costs(State(state): State<AppState>) -> Result<Json<Costs>, ApiError> {
     Ok(Json(Costs {
         today_usd,
         reviews_today,
-        daily_budget_usd: state.daily_budget_usd,
-        resets_at_ms: day + 86_400_000,
+        daily_budget_usd: settings.daily_budget_usd,
+        resets_at_ms: settings.day_start_ms(day + 86_400_000 + 3_600_000),
     }))
 }
 
