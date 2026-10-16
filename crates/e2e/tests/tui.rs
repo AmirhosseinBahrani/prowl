@@ -617,3 +617,49 @@ async fn requesting_changes_and_dismissing_from_the_queue_tab() {
     tui.quit().await;
     h.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn the_settings_tab_changes_settings_live() {
+    let h = Harness::start().await.unwrap();
+    h.connect_github("octo").await.unwrap();
+    repos(&h);
+    h.client().repos(&RepoQuery::default()).await.unwrap();
+    h.client().watch("acme/api").await.unwrap();
+    let tui = Tui::of(&h);
+    tui.wait_for("1 Queue").await;
+
+    tui.press(KeyCode::Char('6'));
+    tui.wait_for("Daily budget (USD)").await;
+    // Down to "Daily budget (USD)" (the 6th setting) and set it.
+    for _ in 0..5 {
+        tui.press(KeyCode::Down);
+    }
+    tui.press(KeyCode::Enter);
+    tui.type_text("2");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Saved: it applies right away.").await;
+    tui.wait_for("$0.00 / $2.00 today").await;
+    assert_eq!(
+        h.client().settings().await.unwrap().daily_budget_usd,
+        Some(2.0)
+    );
+
+    // An invalid value shows the daemon's explanation.
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Enter);
+    tui.press(KeyCode::Backspace);
+    tui.press(KeyCode::Backspace);
+    tui.type_text("0");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("risk_threshold must be 1–100").await;
+
+    tui.press(KeyCode::Char('a'));
+    tui.type_text("acme/api migrations/**");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("acme/api  migrations/**").await;
+    let rules = h.client().settings().await.unwrap().file_rules;
+    assert_eq!(rules["acme/api"], ["migrations/**"]);
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}

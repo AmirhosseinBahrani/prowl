@@ -65,7 +65,12 @@ pub(crate) fn message(event: &Event) -> Option<(String, String)> {
     }
 }
 
-pub(crate) fn spawn(events: &EventBus, notifier: Arc<dyn Notifier>, shutdown: CancellationToken) {
+pub(crate) fn spawn(
+    events: &EventBus,
+    notifier: Arc<dyn Notifier>,
+    settings: crate::settings::SettingsStore,
+    shutdown: CancellationToken,
+) {
     let mut rx = events.subscribe();
     tokio::spawn(async move {
         let mut warned = false;
@@ -79,6 +84,9 @@ pub(crate) fn spawn(events: &EventBus, notifier: Arc<dyn Notifier>, shutdown: Ca
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => return,
             };
+            if !settings.get().notifications {
+                continue;
+            }
             let Some((title, body)) = message(&event) else {
                 continue;
             };

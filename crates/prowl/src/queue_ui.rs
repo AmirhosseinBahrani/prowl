@@ -170,5 +170,6 @@ fn short_reason(reason: &prowld::Reason) -> String {
         RiskScore { score, .. } => format!("risk {score}"),
         InvalidOutput { .. } => "unusable review".into(),
         TooLarge { .. } => "too large".into(),
+        FilePattern { .. } => "file rule".into(),
     }
 }

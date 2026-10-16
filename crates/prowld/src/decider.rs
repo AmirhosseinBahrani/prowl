@@ -38,6 +38,11 @@ pub enum Reason {
         score: u8,
         threshold: u8,
     },
+    /// A changed file matched one of the repository's file-pattern safety rules.
+    FilePattern {
+        pattern: String,
+        file: String,
+    },
     /// Too big to send to the agent; no Claude run happened.
     TooLarge {
         changed_lines: u64,

@@ -10,6 +10,7 @@ use crate::feed_tab::FeedTab;
 use crate::history_tab::HistoryTab;
 use crate::policy_tab::{DryRunState, PolicyTab};
 use crate::queue_tab::{QueueAction, QueueTab};
+use crate::settings_tab::SettingsTab;
 
 pub const PER_PAGE: usize = 15;
 
@@ -116,6 +117,8 @@ pub enum Msg {
         action: QueueAction,
         result: Result<prowld::QueueItem, String>,
     },
+    Settings(Result<prowld::Settings, String>),
+    SettingsSaved(Result<prowld::Settings, String>),
 }
 
 /// Work for the runtime to do; it answers with a [`Msg`].
@@ -181,6 +184,10 @@ pub enum Cmd {
         action: QueueAction,
         comment: String,
     },
+    LoadSettings,
+    SaveSettings {
+        patch: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +202,7 @@ pub struct App {
     pub policy: PolicyTab,
     pub feed: FeedTab,
     pub queue: QueueTab,
+    pub settings: SettingsTab,
     pub history: HistoryTab,
     pub status: StatusBar,
     /// A one-line message shown above the status bar.
@@ -218,6 +226,7 @@ impl App {
             policy: PolicyTab::default(),
             feed: FeedTab::default(),
             queue: QueueTab::default(),
+            settings: SettingsTab::default(),
             history: HistoryTab::default(),
             status: StatusBar::default(),
             notice: None,
@@ -400,6 +409,18 @@ impl App {
                 self.queue.error = Some(e);
                 vec![]
             }
+            Msg::Settings(Ok(settings)) => {
+                self.settings.settings = Some(settings);
+                vec![]
+            }
+            Msg::SettingsSaved(result) => {
+                self.settings.on_saved(result);
+                vec![Cmd::LoadStatusBar]
+            }
+            Msg::Settings(Err(e)) => {
+                self.notice = Some(e);
+                vec![]
+            }
             Msg::QueueItems(Err(e)) | Msg::QueueDetail(Err(e)) => {
                 self.notice = Some(e);
                 vec![]
@@ -449,6 +470,7 @@ impl App {
             }
             "auth.pending" => vec![Cmd::LoadAuth],
             "policy.changed" if !self.policy.list.is_empty() => vec![Cmd::LoadPolicies],
+            "settings.changed" if self.settings.settings.is_some() => vec![Cmd::LoadSettings],
             kind if kind.starts_with("repo.")
                 || kind.starts_with("queue.")
                 || kind.starts_with("review.")
@@ -477,6 +499,7 @@ impl App {
                 Tab::Feed if self.feed.captures_keys() => return self.feed.on_key(key),
                 Tab::History if self.history.captures_keys() => return self.history.on_key(key),
                 Tab::Queue if self.queue.captures_keys() => return self.queue.on_key(key),
+                Tab::Settings if self.settings.captures_keys() => return self.settings.on_key(key),
                 _ => {}
             }
         }
@@ -563,18 +586,18 @@ impl App {
                 Tab::Feed if !self.feed.loaded => vec![Cmd::LoadRecentEvents],
                 Tab::History => vec![Cmd::LoadReviews],
                 Tab::Queue => vec![Cmd::LoadQueue],
+                Tab::Settings => vec![Cmd::LoadSettings],
                 _ => vec![],
             };
         }
         match self.tab {
-            Tab::Repos => return self.on_picker_key(key),
-            Tab::Policy => return self.policy.on_key(key),
-            Tab::Feed => return self.feed.on_key(key),
-            Tab::History => return self.history.on_key(key),
-            Tab::Queue => return self.queue.on_key(key),
-            _ => {}
+            Tab::Repos => self.on_picker_key(key),
+            Tab::Policy => self.policy.on_key(key),
+            Tab::Feed => self.feed.on_key(key),
+            Tab::History => self.history.on_key(key),
+            Tab::Queue => self.queue.on_key(key),
+            Tab::Settings => self.settings.on_key(key),
         }
-        vec![]
     }
 
     fn picker_visible(&self) -> bool {

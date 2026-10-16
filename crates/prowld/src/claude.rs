@@ -29,8 +29,14 @@ pub(crate) struct ClaudeSettings {
     /// Explicit binary; otherwise `claude` is looked up on PATH.
     pub bin: Option<PathBuf>,
     pub env: Vec<(String, String)>,
+}
+
+/// Per-run choices, taken from the current settings.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RunOptions {
     pub model: Option<String>,
     pub timeout: Duration,
+    /// Passed as `--max-budget-usd`.
     pub max_budget_usd: Option<f64>,
 }
 
@@ -86,7 +92,7 @@ impl Claude {
         extra_dir: &Path,
         prompt: &str,
         resume: Option<&str>,
-        max_budget_usd: Option<f64>,
+        options: &RunOptions,
         mut on_text: impl FnMut(&str),
     ) -> Result<ClaudeAnswer, ClaudeError> {
         let bin = self.locate()?;
@@ -109,14 +115,10 @@ impl Claude {
             .arg(extra_dir)
             .arg("--json-schema")
             .arg(crate::review::schema().to_string());
-        if let Some(model) = &self.settings.model {
+        if let Some(model) = &options.model {
             cmd.args(["--model", model]);
         }
-        let budget = match (self.settings.max_budget_usd, max_budget_usd) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-        if let Some(budget) = budget {
+        if let Some(budget) = options.max_budget_usd {
             cmd.args(["--max-budget-usd", &budget.to_string()]);
         }
         if let Some(session) = resume {
@@ -174,11 +176,11 @@ impl Claude {
         };
 
         let (status, answer, session_id, stderr) =
-            match tokio::time::timeout(self.settings.timeout, work).await {
+            match tokio::time::timeout(options.timeout, work).await {
                 Ok(result) => result?,
                 Err(_) => {
                     kill_tree(pid);
-                    return Err(ClaudeError::Timeout(self.settings.timeout));
+                    return Err(ClaudeError::Timeout(options.timeout));
                 }
             };
 

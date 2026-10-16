@@ -340,6 +340,9 @@ fn reason_line(reason: &Reason) -> String {
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default()
         ),
+        Reason::FilePattern { pattern, file } => {
+            format!("Changes `{file}`, which matches the safety rule `{pattern}`")
+        }
         Reason::TooLarge {
             changed_lines,
             changed_files,
@@ -465,6 +468,7 @@ pub(crate) fn describe(decision: Decision, reasons: &[Reason]) -> String {
                     .unwrap_or_default()
             ),
             Reason::RiskScore { score, threshold } => format!("risk {score} ≥ {threshold}"),
+            Reason::FilePattern { pattern, .. } => format!("file rule {pattern}"),
             Reason::TooLarge {
                 changed_lines,
                 changed_files,
