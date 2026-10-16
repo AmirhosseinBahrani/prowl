@@ -140,7 +140,10 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
                 Line::from(""),
             ];
             lines.extend(qr_lines(verification_uri));
-            lines.push(Line::from("Waiting for GitHub…").dim());
+            lines.push(Line::from(vec![
+                "[o] ".bold(),
+                "open it in your browser · waiting for GitHub…".dim(),
+            ]));
             centered(frame, area, "Connect your GitHub account", lines);
         }
         other => {

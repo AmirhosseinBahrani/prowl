@@ -539,6 +539,14 @@ impl App {
             },
             Screen::Login => match key.code {
                 KeyCode::Enter => vec![Cmd::StartLogin],
+                KeyCode::Char('o') => match &self.auth {
+                    Some(AuthState::Pending {
+                        verification_uri, ..
+                    }) => vec![Cmd::OpenUrl {
+                        url: verification_uri.clone(),
+                    }],
+                    _ => vec![],
+                },
                 _ => vec![],
             },
             Screen::Repos => {
