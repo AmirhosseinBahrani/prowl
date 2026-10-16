@@ -34,13 +34,19 @@ async fn event_stream_delivers_daemon_started() {
     let h = Harness::start().await.unwrap();
 
     let mut events = Box::pin(h.client().events(0).await.unwrap());
-    let first = tokio::time::timeout(Duration::from_secs(5), events.next())
-        .await
-        .expect("an event within 5s")
-        .expect("stream open")
-        .unwrap();
+    let started = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(event) = events.next().await {
+            let event = event.unwrap();
+            if event.kind == "daemon.started" {
+                return event;
+            }
+        }
+        panic!("stream ended without daemon.started");
+    })
+    .await
+    .expect("daemon.started within 5s");
 
-    assert_eq!(first.kind, "daemon.started");
+    assert_eq!(started.payload["version"], env!("CARGO_PKG_VERSION"));
     drop(events);
     h.shutdown().await.unwrap();
 }

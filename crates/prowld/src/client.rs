@@ -4,7 +4,7 @@ use std::path::Path;
 
 use bytes::Bytes;
 use futures::Stream;
-use http_body_util::{BodyExt, Empty};
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::{Method, Request, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 
 use crate::auth::AuthState;
 use crate::events::Event;
+use crate::policy::{EffectivePolicy, PolicyVersion, Scope};
 use crate::server::Status;
 use crate::transport::{self, Endpoint};
 
@@ -73,6 +74,52 @@ impl ApiClient {
         self.call_json(Method::DELETE, "/v1/auth").await
     }
 
+    /// The policy that applies to `repo` (`owner/repo`), or the global one.
+    pub async fn effective_policy(
+        &self,
+        repo: Option<&str>,
+    ) -> Result<EffectivePolicy, ClientError> {
+        match repo {
+            Some(repo) => self.get_json(&format!("/v1/policy?repo={repo}")).await,
+            None => self.get_json("/v1/policy").await,
+        }
+    }
+
+    pub async fn policy(&self, scope: &Scope) -> Result<EffectivePolicy, ClientError> {
+        self.get_json(&policy_path(scope)).await
+    }
+
+    pub async fn save_policy(
+        &self,
+        scope: &Scope,
+        content: &str,
+    ) -> Result<EffectivePolicy, ClientError> {
+        let body = serde_json::json!({ "content": content });
+        self.call_json_body(Method::PUT, &policy_path(scope), Some(body))
+            .await
+    }
+
+    pub async fn delete_policy(&self, scope: &Scope) -> Result<(), ClientError> {
+        let response = self
+            .send(Method::DELETE, &policy_path(scope), Some(&self.token), None)
+            .await?;
+        success_body(response).await.map(drop)
+    }
+
+    pub async fn policy_versions(&self, scope: &Scope) -> Result<Vec<PolicyVersion>, ClientError> {
+        self.get_json(&format!("{}/versions", policy_path(scope)))
+            .await
+    }
+
+    pub async fn restore_policy(
+        &self,
+        scope: &Scope,
+        version_id: i64,
+    ) -> Result<EffectivePolicy, ClientError> {
+        let path = format!("{}/versions/{version_id}/restore", policy_path(scope));
+        self.call_json(Method::POST, &path).await
+    }
+
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
         self.call_json(Method::GET, path).await
     }
@@ -82,7 +129,16 @@ impl ApiClient {
         method: Method,
         path: &str,
     ) -> Result<T, ClientError> {
-        let response = self.send(method, path, Some(&self.token)).await?;
+        self.call_json_body(method, path, None).await
+    }
+
+    async fn call_json_body<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<serde_json::Value>,
+    ) -> Result<T, ClientError> {
+        let response = self.send(method, path, Some(&self.token), body).await?;
         let body = success_body(response).await?;
         Ok(serde_json::from_slice(&body)?)
     }
@@ -93,7 +149,7 @@ impl ApiClient {
         path: &str,
         token: Option<&str>,
     ) -> Result<(StatusCode, Bytes), ClientError> {
-        let response = self.send(Method::GET, path, token).await?;
+        let response = self.send(Method::GET, path, token, None).await?;
         let status = response.status();
         let body = response.into_body().collect().await?.to_bytes();
         Ok((status, body))
@@ -105,7 +161,9 @@ impl ApiClient {
         since: i64,
     ) -> Result<impl Stream<Item = Result<Event, ClientError>> + Send + 'static, ClientError> {
         let path = format!("/v1/events?since={since}");
-        let response = self.send(Method::GET, &path, Some(&self.token)).await?;
+        let response = self
+            .send(Method::GET, &path, Some(&self.token), None)
+            .await?;
         if !response.status().is_success() {
             return Err(success_body(response).await.unwrap_err());
         }
@@ -117,6 +175,7 @@ impl ApiClient {
         method: Method,
         path: &str,
         token: Option<&str>,
+        body: Option<serde_json::Value>,
     ) -> Result<Response<Incoming>, ClientError> {
         let io = transport::connect(&self.endpoint).await.map_err(|source| {
             ClientError::Unreachable {
@@ -136,10 +195,24 @@ impl ApiClient {
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
+        let body = match body {
+            Some(json) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                Bytes::from(json.to_string())
+            }
+            None => Bytes::new(),
+        };
         let request = request
-            .body(Empty::<Bytes>::new())
+            .body(Full::new(body))
             .expect("static request parts are valid");
         Ok(sender.send_request(request).await?)
+    }
+}
+
+fn policy_path(scope: &Scope) -> String {
+    match scope {
+        Scope::Global => "/v1/policies/global".into(),
+        Scope::Repo { owner, repo } => format!("/v1/policies/repos/{owner}/{repo}"),
     }
 }
 

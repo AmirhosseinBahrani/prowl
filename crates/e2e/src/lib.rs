@@ -40,6 +40,7 @@ impl Harness {
         config.github_client_id = Some(TEST_CLIENT_ID.into());
         // Never touch the developer's real keychain from tests.
         config.credentials = CredentialBackend::File;
+        config.policy_sync_interval = std::time::Duration::from_millis(50);
         config.claude_bin = Some(claude.bin());
         config.claude_env = claude.env();
         config
@@ -71,6 +72,14 @@ impl Harness {
         let mut config = Self::config(self.home.path(), &self.github, &self.claude);
         edit(&mut config);
         self.daemon = Some(prowld::start(config).await?);
+        Ok(())
+    }
+
+    /// Stops the daemon but keeps the home and fakes, for simulating changes between runs.
+    pub async fn shutdown_daemon_only(&mut self) -> anyhow::Result<()> {
+        if let Some(daemon) = self.daemon.take() {
+            daemon.shutdown().await?;
+        }
         Ok(())
     }
 

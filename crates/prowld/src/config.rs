@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 
@@ -24,6 +25,8 @@ pub struct Config {
     /// Client ID of the PRowl GitHub OAuth App (device flow must be enabled on it).
     pub github_client_id: Option<String>,
     pub credentials: CredentialBackend,
+    /// How often policy files are checked for edits made outside PRowl.
+    pub policy_sync_interval: Duration,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -41,6 +44,7 @@ impl Config {
                 .or_else(|| option_env!("PROWL_GITHUB_CLIENT_ID").map(str::to_owned))
                 .filter(|id| !id.is_empty()),
             credentials: CredentialBackend::Auto,
+            policy_sync_interval: Duration::from_secs(2),
             claude_bin: None,
             claude_env: Vec::new(),
         }
