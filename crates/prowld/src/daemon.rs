@@ -16,6 +16,7 @@ use crate::github::GitHub;
 use crate::jobs::Jobs;
 use crate::policy::PolicyStore;
 use crate::poller::{PollSettings, Poller};
+use crate::queue::Queue;
 use crate::repos::Repos;
 use crate::reviews::Reviews;
 use crate::server::{self, AppState};
@@ -100,12 +101,14 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
 
     let repos = Repos::new(db.clone(), github.clone(), auth.clone(), events.clone());
     let jobs = Jobs::new(db.clone());
+    let queue = Queue::new(db.clone(), github.clone(), auth.clone(), events.clone());
     let poller = Poller::new(
         github.clone(),
         auth.clone(),
         repos.clone(),
         jobs.clone(),
         events.clone(),
+        queue.clone(),
         PollSettings {
             include_team_requests: config.include_team_requests,
             skip_drafts: config.skip_drafts,
@@ -140,6 +143,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         }),
         events: events.clone(),
         github: github.clone(),
+        queue: queue.clone(),
         decision: DecisionSettings {
             risk_threshold: config.risk_threshold,
         },
@@ -153,6 +157,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         repos,
         jobs,
         reviews,
+        queue,
         poller,
         token: token.clone(),
         events: events.clone(),

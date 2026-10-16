@@ -173,6 +173,23 @@ pub(crate) struct Submitted {
     pub html_url: String,
 }
 
+/// A review someone submitted on a PR.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SubmittedReview {
+    pub user: Option<ApiOwner>,
+    /// `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED` or `PENDING`.
+    pub state: String,
+    #[serde(default)]
+    pub submitted_at: Option<String>,
+}
+
+/// What a person decided about a PR (submitted from the app on their explicit action).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HumanVerdict {
+    Approve,
+    RequestChanges,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Team {
     pub slug: String,
@@ -410,6 +427,107 @@ impl GitHub {
             review,
         )
         .await
+    }
+
+    /// A comment on the PR's conversation (not a review, so review requests stay pending).
+    pub(crate) async fn create_issue_comment(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        body: &str,
+    ) -> Result<Submitted, GitHubError> {
+        self.send_json(
+            token,
+            reqwest::Method::POST,
+            &format!("/repos/{repo}/issues/{number}/comments"),
+            &serde_json::json!({ "body": body }),
+        )
+        .await
+    }
+
+    pub(crate) async fn list_reviews(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<SubmittedReview>, GitHubError> {
+        self.get_json(
+            token,
+            &format!("/repos/{repo}/pulls/{number}/reviews"),
+            &[("per_page", "100")],
+        )
+        .await
+    }
+
+    /// Submits the user's own decision. Only ever called for an explicit action in the app.
+    pub(crate) async fn submit_human_review(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        commit_id: &str,
+        verdict: HumanVerdict,
+        body: &str,
+    ) -> Result<Submitted, GitHubError> {
+        let event = match verdict {
+            HumanVerdict::Approve => "APPROVE",
+            HumanVerdict::RequestChanges => "REQUEST_CHANGES",
+        };
+        self.send_json(
+            token,
+            reqwest::Method::POST,
+            &format!("/repos/{repo}/pulls/{number}/reviews"),
+            &serde_json::json!({ "commit_id": commit_id, "event": event, "body": body }),
+        )
+        .await
+    }
+
+    /// The PR's unified diff.
+    pub(crate) async fn pull_diff(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<String, GitHubError> {
+        let response = self
+            .http
+            .get(format!("{}/repos/{repo}/pulls/{number}", self.api_url))
+            .header(header::ACCEPT, "application/vnd.github.diff")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(token)
+            .send()
+            .await?;
+        self.record_rate_limit(&response);
+        Ok(self.check(response).await?.text().await?)
+    }
+
+    pub(crate) async fn remove_label(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        label: &str,
+    ) -> Result<(), GitHubError> {
+        let response = self
+            .http
+            .delete(format!(
+                "{}/repos/{repo}/issues/{number}/labels/{}",
+                self.api_url,
+                label.replace(':', "%3A")
+            ))
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(token)
+            .send()
+            .await?;
+        self.record_rate_limit(&response);
+        match self.check(response).await {
+            Ok(_) => Ok(()),
+            // Not there: nothing to remove.
+            Err(GitHubError::Status { status, .. }) if status == StatusCode::NOT_FOUND => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 
     /// Creates the label if the repository doesn't have it yet.
