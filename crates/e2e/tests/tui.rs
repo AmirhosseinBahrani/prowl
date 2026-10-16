@@ -63,7 +63,8 @@ impl Tui {
         let log = opened.clone();
         let editor = Arc::new(move |path: &std::path::Path| {
             log.lock().unwrap().push(path.to_path_buf());
-            let mut text = std::fs::read_to_string(path).unwrap();
+            // Like a real editor, keep whatever line endings the file has.
+            let mut text = std::fs::read_to_string(path).unwrap().replace("\r\n", "\n");
             text = text.replace(
                 "## ALWAYS require human review\n",
                 &format!("## ALWAYS require human review\n{addition}"),
