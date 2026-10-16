@@ -7,16 +7,14 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-/// Tools Claude may use while reviewing. Anything else is denied without asking.
-const ALLOWED_TOOLS: &[&str] = &[
-    "Read",
-    "Grep",
-    "Glob",
-    "Bash(git diff:*)",
-    "Bash(git log:*)",
-    "Bash(git show:*)",
-];
+/// Tools Claude may use while reviewing: reading and searching the checkout, nothing else.
+/// No shell: even "read-only" git commands can write files (`--output`) or read outside the
+/// checkout (`--no-index`), and the PR content steering Claude is untrusted.
+const TOOLS: &str = "Read,Grep,Glob";
+const ALLOWED_TOOLS: &[&str] = &["Read", "Grep", "Glob"];
 const DISALLOWED_TOOLS: &[&str] = &[
+    "Bash",
+    "PowerShell",
     "Write",
     "Edit",
     "MultiEdit",
@@ -85,6 +83,7 @@ impl Claude {
     pub(crate) async fn run(
         &self,
         cwd: &Path,
+        extra_dir: &Path,
         prompt: &str,
         resume: Option<&str>,
         mut on_text: impl FnMut(&str),
@@ -99,11 +98,14 @@ impl Claude {
             .args(["--restricted", "--strict-mcp-config"])
             .args(["--permission-mode", "dontAsk"])
             .arg("--tools")
-            .arg("Read,Grep,Glob,Bash")
+            .arg(TOOLS)
             .arg("--allowedTools")
             .args(ALLOWED_TOOLS)
             .arg("--disallowedTools")
             .args(DISALLOWED_TOOLS)
+            // The only readable place outside the checkout: PRowl's prepared diff.
+            .arg("--add-dir")
+            .arg(extra_dir)
             .arg("--json-schema")
             .arg(crate::review::schema().to_string());
         if let Some(model) = &self.settings.model {

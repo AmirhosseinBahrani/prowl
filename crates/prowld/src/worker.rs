@@ -9,14 +9,17 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::Auth;
 use crate::claude::{Claude, ClaudeError};
+use crate::decider::{self, Decision, DecisionSettings};
 use crate::events::EventBus;
+use crate::github::GitHub;
 use crate::jobs::{Job, Jobs};
 use crate::policy::{PolicyStore, Scope};
 use crate::poller::{Poller, Recheck};
 use crate::prompt::{self, PrContext};
+use crate::publish::{self, Target};
 use crate::review::{self, ReviewOutput};
 use crate::reviews::{NewReview, Reviews};
-use crate::workspace::Workspace;
+use crate::workspace::{Checkout, Workspace};
 
 const TICK: Duration = Duration::from_millis(250);
 /// How long a job waits before another try when it can't run right now (e.g. GitHub down).
@@ -29,6 +32,8 @@ pub mod kind {
     pub const FAILED: &str = "review.failed";
     pub const CANCELLED: &str = "job.cancelled";
     pub const CLAUDE_MISSING: &str = "claude.missing";
+    pub const DECIDED: &str = "review.decided";
+    pub const PUBLISHED: &str = "review.published";
 }
 
 #[derive(Clone)]
@@ -45,6 +50,8 @@ struct Inner {
     workspace: Workspace,
     claude: Claude,
     events: EventBus,
+    github: GitHub,
+    decision: DecisionSettings,
     slots: Arc<Semaphore>,
 }
 
@@ -57,6 +64,8 @@ pub(crate) struct WorkerParts {
     pub workspace: Workspace,
     pub claude: Claude,
     pub events: EventBus,
+    pub github: GitHub,
+    pub decision: DecisionSettings,
     pub concurrency: usize,
 }
 
@@ -73,6 +82,8 @@ impl Worker {
                 workspace: parts.workspace,
                 claude: parts.claude,
                 events: parts.events,
+                github: parts.github,
+                decision: parts.decision,
             }),
         }
     }
@@ -167,6 +178,19 @@ impl Worker {
         let scope = Scope::parse_repo(&job.repo)?;
         let policy = inner.policies.effective(Some(&scope)).await?;
         let labels: Vec<String> = pr.labels.iter().map(|l| l.name.clone()).collect();
+        let checkout = inner
+            .workspace
+            .checkout(
+                job.id,
+                &job.repo,
+                job.pr_number,
+                &pr.base.ref_name,
+                &pr.base.sha,
+                &job.head_sha,
+                &token,
+            )
+            .await?;
+        let material = checkout.material.display().to_string().replace('\\', "/");
         let message = prompt::first_message(
             &PrContext {
                 repo: &job.repo,
@@ -182,21 +206,11 @@ impl Worker {
                 deletions: pr.deletions,
                 labels: &labels,
                 reviewer: &reviewer,
+                material_dir: &material,
             },
             &policy,
         );
 
-        let worktree = inner
-            .workspace
-            .checkout(
-                job.id,
-                &job.repo,
-                job.pr_number,
-                &pr.base.ref_name,
-                &job.head_sha,
-                &token,
-            )
-            .await?;
         self.emit(
             kind::STARTED,
             job,
@@ -204,8 +218,8 @@ impl Worker {
         )
         .await;
         let started = Instant::now();
-        let outcome = self.ask(job, &worktree, &message).await;
-        inner.workspace.remove(&job.repo, &worktree).await;
+        let outcome = self.ask(job, &checkout, &message).await;
+        inner.workspace.remove(&job.repo, &checkout).await;
         let (answer, output, cost) = outcome?;
 
         let review_id = inner
@@ -220,7 +234,6 @@ impl Worker {
                 duration_ms: started.elapsed().as_millis() as i64,
             })
             .await?;
-        inner.jobs.finish(job.id, "done", None).await?;
         let details = match &output {
             Ok(o) => serde_json::json!({
                 "review_id": review_id, "valid": true, "severity": o.severity,
@@ -233,6 +246,51 @@ impl Worker {
             }),
         };
         self.emit(kind::FINISHED, job, details).await;
+
+        let rule_ids: Vec<String> = policy.rules.iter().map(|r| r.id.clone()).collect();
+        let verdict = decider::decide(
+            output.as_ref().map_err(String::as_str),
+            &rule_ids,
+            inner.decision,
+        );
+        inner
+            .reviews
+            .set_decision(review_id, verdict.decision, &verdict.reasons)
+            .await?;
+        self.emit(
+            kind::DECIDED,
+            job,
+            serde_json::json!({
+                "review_id": review_id,
+                "decision": verdict.decision,
+                "reasons": verdict.reasons,
+                "summary": publish::describe(verdict.decision, &verdict.reasons),
+            }),
+        )
+        .await;
+
+        if let (Decision::AgentOnly, Ok(output)) = (verdict.decision, &output) {
+            let target = Target {
+                repo: &job.repo,
+                number: job.pr_number,
+                head_sha: &job.head_sha,
+                reviewer: &reviewer,
+                policy_scope: &policy.scope,
+                policy_version_id: policy.version_id,
+            };
+            let submitted = publish::agent_only(&inner.github, &token, &target, output).await?;
+            inner
+                .reviews
+                .set_published(review_id, submitted.id, &submitted.html_url)
+                .await?;
+            self.emit(
+                kind::PUBLISHED,
+                job,
+                serde_json::json!({ "review_id": review_id, "url": submitted.html_url }),
+            )
+            .await;
+        }
+        inner.jobs.finish(job.id, "done", None).await?;
         Ok(())
     }
 
@@ -241,10 +299,10 @@ impl Worker {
     async fn ask(
         &self,
         job: &Job,
-        cwd: &std::path::Path,
+        checkout: &Checkout,
         message: &str,
     ) -> Result<(String, Result<ReviewOutput, String>, Option<f64>), ClaudeError> {
-        let first = self.ask_once(job, cwd, message, None).await?;
+        let first = self.ask_once(job, checkout, message, None).await?;
         let mut cost = first.cost_usd;
         let parsed = parse_answer(&first);
         let Err(problem) = parsed else {
@@ -253,9 +311,9 @@ impl Worker {
         tracing::info!(job = job.id, %problem, "review answer invalid; asking Claude to repair it");
         let repair = prompt::repair_message(&problem);
         let second = match &first.session_id {
-            Some(session) => self.ask_once(job, cwd, &repair, Some(session)).await?,
+            Some(session) => self.ask_once(job, checkout, &repair, Some(session)).await?,
             None => {
-                self.ask_once(job, cwd, &format!("{message}\n\n{repair}"), None)
+                self.ask_once(job, checkout, &format!("{message}\n\n{repair}"), None)
                     .await?
             }
         };
@@ -270,7 +328,7 @@ impl Worker {
     async fn ask_once(
         &self,
         job: &Job,
-        cwd: &std::path::Path,
+        checkout: &Checkout,
         prompt: &str,
         resume: Option<&str>,
     ) -> Result<crate::claude::ClaudeAnswer, ClaudeError> {
@@ -289,9 +347,15 @@ impl Worker {
         let result = self
             .inner
             .claude
-            .run(cwd, prompt, resume, |text| {
-                let _ = tx.send(text.to_owned());
-            })
+            .run(
+                &checkout.worktree,
+                &checkout.material,
+                prompt,
+                resume,
+                |text| {
+                    let _ = tx.send(text.to_owned());
+                },
+            )
             .await;
         drop(tx);
         let _ = forward.await;

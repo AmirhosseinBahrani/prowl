@@ -10,6 +10,7 @@ use crate::claude::{Claude, ClaudeSettings};
 use crate::client::ApiClient;
 use crate::config::{self, Config};
 use crate::credentials::CredentialStore;
+use crate::decider::DecisionSettings;
 use crate::events::{self, EventBus};
 use crate::github::GitHub;
 use crate::jobs::Jobs;
@@ -100,7 +101,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     let repos = Repos::new(db.clone(), github.clone(), auth.clone(), events.clone());
     let jobs = Jobs::new(db.clone());
     let poller = Poller::new(
-        github,
+        github.clone(),
         auth.clone(),
         repos.clone(),
         jobs.clone(),
@@ -138,6 +139,10 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
             max_budget_usd: config.review_budget_usd,
         }),
         events: events.clone(),
+        github: github.clone(),
+        decision: DecisionSettings {
+            risk_threshold: config.risk_threshold,
+        },
         concurrency: config.review_concurrency,
     })
     .spawn(shutdown.clone());
