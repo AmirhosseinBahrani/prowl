@@ -76,6 +76,14 @@ impl Workspace {
         if worktree.exists() {
             self.remove_locked(&bare, &worktree).await;
         }
+        // A `git worktree add` killed part-way leaves the path registered and *locked*, which
+        // `prune` won't touch and which blocks every later checkout to it. Clear it.
+        let _ = git(&bare, &[])
+            .args(["worktree", "unlock"])
+            .arg(&worktree)
+            .run()
+            .await;
+        let _ = git(&bare, &[]).args(["worktree", "prune"]).run().await;
         std::fs::create_dir_all(&self.worktrees_dir)?;
         git(&bare, &[])
             .args(["worktree", "add", "--detach"])
