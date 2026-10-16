@@ -12,6 +12,7 @@ use crate::credentials::CredentialStore;
 use crate::events::{self, EventBus};
 use crate::github::GitHub;
 use crate::policy::PolicyStore;
+use crate::repos::Repos;
 use crate::server::{self, AppState};
 use crate::store;
 use crate::transport::{self, Endpoint};
@@ -72,7 +73,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     let github = GitHub::new(&config.github_api_url, &config.github_web_url)?;
     let credentials = CredentialStore::open(config.credentials, config.home.clone()).await;
     let auth = Auth::load(
-        github,
+        github.clone(),
         config.github_client_id.clone(),
         credentials,
         db.clone(),
@@ -93,6 +94,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     let state = AppState {
         auth: auth.clone(),
         policies,
+        repos: Repos::new(db.clone(), github, auth.clone(), events.clone()),
         token: token.clone(),
         events: events.clone(),
         started: Instant::now(),

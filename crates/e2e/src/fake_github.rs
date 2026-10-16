@@ -32,6 +32,8 @@ impl RecordedRequest {
 struct Inner {
     /// Responses per route, served in order; the last one repeats.
     routes: HashMap<(Method, String), VecDeque<(StatusCode, serde_json::Value)>>,
+    /// Routes that also require a query-string fragment; checked before `routes`.
+    query_routes: Vec<(Method, String, String, (StatusCode, serde_json::Value))>,
     requests: Vec<RecordedRequest>,
 }
 
@@ -78,6 +80,24 @@ impl FakeGitHub {
             .insert((method, path.to_owned()), responses.into());
     }
 
+    /// Scripts the response for `method path` when the query string contains `query`
+    /// (e.g. `page=2`). Takes precedence over [`route`](Self::route).
+    pub fn route_when(
+        &self,
+        method: Method,
+        path: &str,
+        query: &str,
+        status: StatusCode,
+        body: serde_json::Value,
+    ) {
+        self.inner.lock().unwrap().query_routes.push((
+            method,
+            path.to_owned(),
+            query.to_owned(),
+            (status, body),
+        ));
+    }
+
     pub fn requests_to(&self, method: Method, path: &str) -> Vec<RecordedRequest> {
         self.requests()
             .into_iter()
@@ -115,6 +135,18 @@ async fn handle(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
         body,
         raw_body: String::from_utf8_lossy(&bytes).into_owned(),
     });
+    let query = inner
+        .requests
+        .last()
+        .and_then(|r| r.query.clone())
+        .unwrap_or_default();
+    if let Some((_, _, _, (status, body))) = inner
+        .query_routes
+        .iter()
+        .find(|(m, p, q, _)| *m == method && *p == path && query.split('&').any(|part| part == q))
+    {
+        return (*status, axum::Json(body.clone())).into_response();
+    }
     match inner.routes.get_mut(&(method, path)) {
         Some(queue) => {
             let (status, body) = if queue.len() > 1 {

@@ -16,11 +16,13 @@ use tokio_util::sync::CancellationToken;
 use crate::auth::{Auth, AuthError, AuthState};
 use crate::events::EventBus;
 use crate::policy::PolicyStore;
+use crate::repos::Repos;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub auth: Auth,
     pub policies: PolicyStore,
+    pub repos: Repos,
     pub token: String,
     pub events: EventBus,
     pub started: Instant,
@@ -44,6 +46,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/auth", get(auth_state).delete(disconnect))
         .route("/v1/auth/device", post(start_device_flow))
         .merge(crate::policy_api::routes())
+        .merge(crate::repos_api::routes())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .with_state(state)
 }
