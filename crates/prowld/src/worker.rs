@@ -37,6 +37,7 @@ pub mod kind {
     pub const DECIDED: &str = "review.decided";
     pub const PUBLISHED: &str = "review.published";
     pub const RETRYING: &str = "review.retrying";
+    pub const BUDGET_REACHED: &str = "budget.reached";
 }
 
 #[derive(Clone)]
@@ -58,6 +59,9 @@ struct Inner {
     publications: Publications,
     decision: DecisionSettings,
     retry: RetrySettings,
+    limits: Limits,
+    /// UTC day (ms at midnight) for which `budget.reached` was announced.
+    budget_reported: std::sync::Mutex<Option<i64>>,
     /// Reviews running right now, read by the power manager.
     active: Arc<std::sync::atomic::AtomicUsize>,
     slots: Arc<Semaphore>,
@@ -77,6 +81,7 @@ pub(crate) struct WorkerParts {
     pub publications: Publications,
     pub decision: DecisionSettings,
     pub retry: RetrySettings,
+    pub limits: Limits,
     pub active: Arc<std::sync::atomic::AtomicUsize>,
     pub concurrency: usize,
 }
@@ -99,6 +104,8 @@ impl Worker {
                 publications: parts.publications,
                 decision: parts.decision,
                 retry: parts.retry,
+                limits: parts.limits,
+                budget_reported: std::sync::Mutex::new(None),
                 active: parts.active,
             }),
         }
@@ -183,6 +190,18 @@ impl Worker {
                 .await?;
             return Ok(());
         };
+        if let Some(reset_at) = inner.github.paused_until() {
+            let wait = (reset_at as i64 * 1000 - crate::events::now_ms()).max(0) as u64;
+            inner
+                .jobs
+                .defer_without_attempt(
+                    job.id,
+                    Duration::from_millis(wait),
+                    "GitHub rate limit nearly used up",
+                )
+                .await?;
+            return Ok(());
+        }
         let (pr, reviewer) = match inner.poller.recheck(&token, job).await {
             Ok(Recheck::Proceed { pr, reviewer }) => (pr, reviewer),
             Ok(Recheck::Cancel(reason)) => {
@@ -232,6 +251,18 @@ impl Worker {
                     .await;
             }
         }
+        let changed_lines = pr.additions + pr.deletions;
+        if changed_lines > inner.limits.max_changed_lines
+            || pr.changed_files > inner.limits.max_changed_files
+        {
+            return self
+                .too_large(job, &token, &reviewer, changed_lines, pr.changed_files)
+                .await;
+        }
+        let Some(budget_left) = self.budget_left(job).await? else {
+            return Ok(());
+        };
+
         if let Err(e) = inner.claude.locate() {
             self.emit(
                 kind::CLAUDE_MISSING,
@@ -285,7 +316,7 @@ impl Worker {
         )
         .await;
         let started = Instant::now();
-        let outcome = self.ask(job, &checkout, &message).await;
+        let outcome = self.ask(job, &checkout, &message, budget_left).await;
         inner.workspace.remove(&job.repo, &checkout).await;
         let (answer, output, cost) = outcome?;
 
@@ -347,6 +378,105 @@ impl Worker {
             output.as_ref().map_err(String::as_str),
         )
         .await
+    }
+
+    /// Sends an oversized PR straight to a human: a stored NEEDS_HUMAN review with no Claude run.
+    async fn too_large(
+        &self,
+        job: &Job,
+        token: &str,
+        reviewer: &str,
+        changed_lines: u64,
+        changed_files: u64,
+    ) -> anyhow::Result<()> {
+        let inner = &self.inner;
+        let policy = inner
+            .policies
+            .effective(Some(&Scope::parse_repo(&job.repo)?))
+            .await?;
+        let detail = "too large for an agent review";
+        let review_id = inner
+            .reviews
+            .insert(&NewReview {
+                job_id: job.id,
+                policy_scope: &policy.scope,
+                policy_version_id: policy.version_id,
+                output: Err(detail),
+                raw_answer: "",
+                cost_usd: None,
+                duration_ms: 0,
+            })
+            .await?;
+        let verdict = decider::Verdict {
+            decision: Decision::NeedsHuman,
+            reasons: vec![decider::Reason::TooLarge {
+                changed_lines,
+                changed_files,
+                max_lines: inner.limits.max_changed_lines,
+                max_files: inner.limits.max_changed_files,
+            }],
+        };
+        inner
+            .reviews
+            .set_decision(review_id, verdict.decision, &verdict.reasons)
+            .await?;
+        self.emit(
+            kind::DECIDED,
+            job,
+            serde_json::json!({
+                "review_id": review_id,
+                "decision": verdict.decision,
+                "reasons": verdict.reasons,
+                "summary": publish::describe(verdict.decision, &verdict.reasons),
+            }),
+        )
+        .await;
+        self.publish(
+            job,
+            token,
+            reviewer,
+            review_id,
+            &policy.scope,
+            policy.version_id,
+            verdict,
+            Err(detail),
+        )
+        .await
+    }
+
+    /// What today's budget still allows for this run: `Some(None)` when there is no cap,
+    /// `None` when it is used up (the job then waits for tomorrow, UTC).
+    async fn budget_left(&self, job: &Job) -> anyhow::Result<Option<Option<f64>>> {
+        let inner = &self.inner;
+        let Some(cap) = inner.limits.daily_budget_usd else {
+            return Ok(Some(None));
+        };
+        let day = utc_midnight_ms(crate::events::now_ms());
+        let (spent, _) = inner.reviews.spent_since(day).await?;
+        if spent < cap {
+            return Ok(Some(Some(cap - spent)));
+        }
+        let tomorrow = day + DAY_MS;
+        let wait = Duration::from_millis((tomorrow - crate::events::now_ms()).max(0) as u64);
+        inner
+            .jobs
+            .defer_without_attempt(job.id, wait, "daily Claude budget reached")
+            .await?;
+        let announce = {
+            let mut reported = inner.budget_reported.lock().unwrap();
+            let first = *reported != Some(day);
+            *reported = Some(day);
+            first
+        };
+        if announce {
+            self.emit(
+                kind::BUDGET_REACHED,
+                job,
+                serde_json::json!({ "spent_usd": spent, "daily_budget_usd": cap, "resumes_at_ms": tomorrow }),
+            )
+            .await;
+        }
+        Ok(None)
     }
 
     /// Posts a decided review to GitHub and records it. Safe to repeat: posts made by an
@@ -428,8 +558,9 @@ impl Worker {
         job: &Job,
         checkout: &Checkout,
         message: &str,
+        budget: Option<f64>,
     ) -> Result<(String, Result<ReviewOutput, String>, Option<f64>), ClaudeError> {
-        let first = self.ask_once(job, checkout, message, None).await?;
+        let first = self.ask_once(job, checkout, message, None, budget).await?;
         let mut cost = first.cost_usd;
         let parsed = parse_answer(&first);
         let Err(problem) = parsed else {
@@ -438,10 +569,19 @@ impl Worker {
         tracing::info!(job = job.id, %problem, "review answer invalid; asking Claude to repair it");
         let repair = prompt::repair_message(&problem);
         let second = match &first.session_id {
-            Some(session) => self.ask_once(job, checkout, &repair, Some(session)).await?,
-            None => {
-                self.ask_once(job, checkout, &format!("{message}\n\n{repair}"), None)
+            Some(session) => {
+                self.ask_once(job, checkout, &repair, Some(session), budget)
                     .await?
+            }
+            None => {
+                self.ask_once(
+                    job,
+                    checkout,
+                    &format!("{message}\n\n{repair}"),
+                    None,
+                    budget,
+                )
+                .await?
             }
         };
         cost = match (cost, second.cost_usd) {
@@ -458,6 +598,7 @@ impl Worker {
         checkout: &Checkout,
         prompt: &str,
         resume: Option<&str>,
+        budget: Option<f64>,
     ) -> Result<crate::claude::ClaudeAnswer, ClaudeError> {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
         let forward = {
@@ -479,6 +620,7 @@ impl Worker {
                 &checkout.material,
                 prompt,
                 resume,
+                budget,
                 |text| {
                     let _ = tx.send(text.to_owned());
                 },
@@ -497,6 +639,22 @@ impl Worker {
         }
         let _ = self.inner.events.emit(kind, payload).await;
     }
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+pub(crate) fn utc_midnight_ms(now_ms: i64) -> i64 {
+    now_ms - now_ms.rem_euclid(DAY_MS)
+}
+
+/// Spending and size limits.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Limits {
+    /// Total Claude spend per UTC day; no new reviews start once reached.
+    pub daily_budget_usd: Option<f64>,
+    /// Added + deleted lines above which a PR goes to a human without a Claude run.
+    pub max_changed_lines: u64,
+    pub max_changed_files: u64,
 }
 
 /// How failed reviews are retried.

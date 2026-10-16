@@ -212,6 +212,8 @@ pub(crate) struct Team {
 }
 
 const PER_PAGE: usize = 100;
+/// Below this many remaining API calls, background work pauses until the limit resets.
+const MIN_RATE_REMAINING: u64 = 50;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct User {
@@ -658,6 +660,23 @@ impl GitHub {
             .await?;
         self.record_rate_limit(&response);
         Ok(self.check(response).await?.json().await?)
+    }
+
+    /// When the rate limit is nearly used up, the time (Unix seconds) it resets. Everything
+    /// that calls GitHub in the background waits until then.
+    pub(crate) fn paused_until(&self) -> Option<u64> {
+        let limit = self.rate_limit();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        match (limit.remaining, limit.reset_at) {
+            (Some(remaining), Some(reset_at))
+                if remaining < MIN_RATE_REMAINING && reset_at > now =>
+            {
+                Some(reset_at)
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn rate_limit(&self) -> RateLimit {

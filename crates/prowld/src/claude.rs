@@ -86,6 +86,7 @@ impl Claude {
         extra_dir: &Path,
         prompt: &str,
         resume: Option<&str>,
+        max_budget_usd: Option<f64>,
         mut on_text: impl FnMut(&str),
     ) -> Result<ClaudeAnswer, ClaudeError> {
         let bin = self.locate()?;
@@ -111,7 +112,11 @@ impl Claude {
         if let Some(model) = &self.settings.model {
             cmd.args(["--model", model]);
         }
-        if let Some(budget) = self.settings.max_budget_usd {
+        let budget = match (self.settings.max_budget_usd, max_budget_usd) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        if let Some(budget) = budget {
             cmd.args(["--max-budget-usd", &budget.to_string()]);
         }
         if let Some(session) = resume {

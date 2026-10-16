@@ -19,7 +19,7 @@ use crate::power::PowerStatus;
 use crate::queue::{QueueDetail, QueueItem};
 use crate::repos::{Repo, RepoPage, RepoQuery};
 use crate::reviews::Review;
-use crate::server::Status;
+use crate::server::{Costs, Status};
 use crate::transport::{self, Endpoint};
 
 #[derive(Debug, thiserror::Error)]
@@ -202,6 +202,11 @@ impl ApiClient {
     pub async fn dismiss(&self, repo: &str, number: u64) -> Result<QueueItem, ClientError> {
         self.call_json(Method::POST, &format!("/v1/queue/{repo}/{number}/dismiss"))
             .await
+    }
+
+    /// Today's Claude spend against the daily budget.
+    pub async fn costs(&self) -> Result<Costs, ClientError> {
+        self.get_json("/v1/costs").await
     }
 
     pub async fn power(&self) -> Result<PowerStatus, ClientError> {

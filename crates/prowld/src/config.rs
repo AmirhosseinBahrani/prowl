@@ -48,6 +48,12 @@ pub struct Config {
     pub retry_base: Duration,
     /// Attempts per review before it is marked failed.
     pub max_attempts: u32,
+    /// Claude spend allowed per UTC day; `None` for no cap.
+    pub daily_budget_usd: Option<f64>,
+    /// PRs changing more lines than this (added + deleted) go to a human without a Claude run.
+    pub max_changed_lines: u64,
+    /// Likewise for the number of changed files.
+    pub max_changed_files: u64,
     /// When to keep the machine awake; `None` picks `ac_only` with a battery, else `always`.
     pub sleep_mode: Option<crate::power::SleepMode>,
     /// Replaces the OS power integration (tests).
@@ -85,6 +91,9 @@ impl Config {
             risk_threshold: 60,
             retry_base: Duration::from_secs(30),
             max_attempts: 5,
+            daily_budget_usd: None,
+            max_changed_lines: 3000,
+            max_changed_files: 100,
             sleep_mode: None,
             power: None,
             power_check_interval: Duration::from_secs(5),
