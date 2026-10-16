@@ -1,0 +1,45 @@
+name: Packaging
+
+# Exercises the release packaging on pull requests that touch it, so problems show up before a
+# tag is pushed. Nothing is published.
+on:
+  pull_request:
+    paths:
+      - "packaging/**"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/packaging.yml"
+      - "Cargo.toml"
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config rpm
+      - run: packaging/package.sh x86_64-unknown-linux-gnu 0.0.0
+      - name: Inspect packages
+        run: |
+          dpkg-deb --info dist/prowl_0.0.0_amd64.deb
+          dpkg-deb --contents dist/prowl_0.0.0_amd64.deb | grep -E 'usr/bin/(prowl|prowld|prowld-service)$'
+          rpm -qip dist/prowl-0.0.0-1.x86_64.rpm
+          rpm -qlp dist/prowl-0.0.0-1.x86_64.rpm | grep -E '/usr/bin/prowld-service$'
+          tar -xzf dist/prowl-0.0.0-x86_64-unknown-linux-gnu.tar.gz -C /tmp
+          /tmp/prowl-0.0.0-x86_64-unknown-linux-gnu/prowl --version
+      - run: python3 packaging/render.py 0.0.0 "$GITHUB_REPOSITORY" dist && cat dist/prowl.rb
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - shell: pwsh
+        run: packaging\package.ps1 -Target x86_64-pc-windows-msvc -Version 0.0.0
+      - name: Inspect the archive
+        shell: pwsh
+        run: |
+          Expand-Archive dist\prowl-0.0.0-x86_64-pc-windows-msvc.zip -DestinationPath $env:RUNNER_TEMP\p
+          & "$env:RUNNER_TEMP\p\prowl-0.0.0-x86_64-pc-windows-msvc\prowl.exe" --version
+          Get-Content dist\prowl-0.0.0-x86_64-pc-windows-msvc.zip.sha256

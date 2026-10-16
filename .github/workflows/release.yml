@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    env:
+      # Optional: set these secrets to codesign the macOS binaries.
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install Linux packaging tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config rpm
+      - name: Package (macOS / Linux)
+        if: runner.os != 'Windows'
+        run: packaging/package.sh ${{ matrix.target }} "${GITHUB_REF_NAME#v}"
+      - name: Sign macOS binaries
+        if: runner.os == 'macOS' && env.MACOS_CERTIFICATE != ''
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > cert.p12
+          security create-keychain -p ci build.keychain
+          security import cert.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p ci build.keychain
+          v="${GITHUB_REF_NAME#v}"; d="dist/prowl-$v-${{ matrix.target }}"
+          for b in prowl prowld prowld-service; do
+            codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$d/$b"
+          done
+          tar -C dist -czf "$d.tar.gz" "prowl-$v-${{ matrix.target }}"
+          (cd dist && shasum -a 256 "prowl-$v-${{ matrix.target }}.tar.gz" > "prowl-$v-${{ matrix.target }}.tar.gz.sha256")
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: packaging\package.ps1 -Target ${{ matrix.target }} -Version $env:GITHUB_REF_NAME.TrimStart('v')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Render Homebrew formula and Scoop manifest
+        run: python3 packaging/render.py "${GITHUB_REF_NAME#v}" "$GITHUB_REPOSITORY" dist
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "PRowl $GITHUB_REF_NAME" --generate-notes \
+            dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.sha256 dist/prowl.rb dist/prowl.json
