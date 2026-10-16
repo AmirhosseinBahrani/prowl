@@ -242,7 +242,21 @@ impl PolicyStore {
             // never existed is not.
             return match self.latest_any(scope).await? {
                 Some(v) if v.source == "delete" => Ok(()),
-                _ => Err(PolicyError::NotFound(scope.key())),
+                latest => {
+                    // DEBUG (temporary): what is really there?
+                    let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or_default();
+                    let listing: Vec<String> = std::fs::read_dir(&dir)
+                        .map(|e| e.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+                        .unwrap_or_else(|e| vec![format!("<read_dir error {e}>")]);
+                    Err(PolicyError::NotFound(format!(
+                        "{} [DEBUG path={} exists={} dir={:?} latest={:?}]",
+                        scope.key(),
+                        path.display(),
+                        path.exists(),
+                        listing,
+                        latest.map(|v| (v.id, v.source))
+                    )))
+                }
             };
         }
         std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
