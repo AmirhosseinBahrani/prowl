@@ -33,6 +33,8 @@ impl Tui {
                     home,
                     tick: Duration::from_millis(100),
                     snapshot: Some(snapshot),
+                    editor: prowl::Editor::Hook(std::sync::Arc::new(|_| {})),
+                    input_paused: None,
                 },
             )
             .await
@@ -180,6 +182,8 @@ async fn first_run_connects_github_and_picks_repositories() {
         .collect();
     assert_eq!(watched, ["acme/payments"]);
 
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Your Review Policy").await;
     tui.press(KeyCode::Enter);
     tui.wait_for("1 Queue").await;
     tui.wait_for("@octo").await;

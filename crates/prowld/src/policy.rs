@@ -90,6 +90,17 @@ pub struct EffectivePolicy {
     pub rules: Vec<PolicyRule>,
 }
 
+/// One policy in effect, for listings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PolicySummary {
+    /// `global` or `owner/repo`.
+    pub scope: String,
+    pub version_id: i64,
+    pub rules: Vec<String>,
+    /// The file to edit; PRowl picks up changes to it.
+    pub path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PolicyVersion {
     pub id: i64,
@@ -258,8 +269,8 @@ impl PolicyStore {
     }
 
     /// Records a version for every policy file whose content differs from its latest version.
-    pub(crate) async fn sync_from_disk(&self) -> Result<(), PolicyError> {
-        let _guard = self.lock.lock().await;
+    /// Global plus every override that exists on disk or has a recorded history.
+    async fn known_scopes(&self) -> Result<Vec<Scope>, PolicyError> {
         let mut scopes = vec![Scope::Global];
         let repos = self.dir.join("repos");
         for owner in read_dir_names(&repos) {
@@ -284,6 +295,37 @@ impl PolicyStore {
                 scopes.push(scope);
             }
         }
+        Ok(scopes)
+    }
+
+    /// Every policy currently in effect somewhere: the global one and each override.
+    pub(crate) async fn list(&self) -> Result<Vec<PolicySummary>, PolicyError> {
+        let _guard = self.lock.lock().await;
+        let mut out = Vec::new();
+        for scope in self.known_scopes().await? {
+            self.sync_scope(&scope).await?;
+            let path = scope.path(&self.dir);
+            if !path.exists() {
+                continue;
+            }
+            if let Some(latest) = self.latest(&scope).await? {
+                out.push(PolicySummary {
+                    scope: scope.key(),
+                    version_id: latest.id,
+                    rules: parse_rules(&latest.content)
+                        .into_iter()
+                        .map(|r| r.id)
+                        .collect(),
+                    path: path.display().to_string(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    pub(crate) async fn sync_from_disk(&self) -> Result<(), PolicyError> {
+        let _guard = self.lock.lock().await;
+        let scopes = self.known_scopes().await?;
         for scope in &scopes {
             self.sync_scope(scope).await?;
         }

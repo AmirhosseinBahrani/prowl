@@ -15,4 +15,5 @@ prowld = { path = "../prowld" }
 qrcode.workspace = true
 ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 serde_json.workspace = true
+similar.workspace = true
 tokio.workspace = true

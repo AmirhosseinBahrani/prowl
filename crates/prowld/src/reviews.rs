@@ -123,15 +123,37 @@ impl Reviews {
         Ok(())
     }
 
-    /// Claude spend recorded since `since_ms`, and how many reviews it covers.
+    /// Claude spend recorded since `since_ms` (reviews and dry runs), and how many runs.
     pub(crate) async fn spent_since(&self, since_ms: i64) -> anyhow::Result<(f64, i64)> {
         Ok(sqlx::query_as(
-            "SELECT COALESCE(SUM(cost_usd), 0.0), COUNT(*) FROM reviews
-             WHERE created_at_ms >= ? AND cost_usd IS NOT NULL",
+            "SELECT COALESCE(SUM(cost_usd), 0.0), COUNT(*) FROM (
+                SELECT cost_usd FROM reviews WHERE created_at_ms >= ? AND cost_usd IS NOT NULL
+                UNION ALL
+                SELECT cost_usd FROM dry_runs WHERE created_at_ms >= ? AND cost_usd IS NOT NULL
+             )",
         )
+        .bind(since_ms)
         .bind(since_ms)
         .fetch_one(&self.db)
         .await?)
+    }
+
+    pub(crate) async fn record_dry_run(
+        &self,
+        repo: &str,
+        pr_number: u64,
+        cost_usd: Option<f64>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO dry_runs (repo, pr_number, cost_usd, created_at_ms) VALUES (?, ?, ?, ?)",
+        )
+        .bind(repo)
+        .bind(pr_number as i64)
+        .bind(cost_usd)
+        .bind(events::now_ms())
+        .execute(&self.db)
+        .await?;
+        Ok(())
     }
 
     pub(crate) async fn list(&self, job_id: Option<i64>) -> anyhow::Result<Vec<Review>> {

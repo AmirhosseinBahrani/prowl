@@ -11,7 +11,7 @@ use crate::auth::Auth;
 use crate::claude::{Claude, ClaudeError};
 use crate::decider::{self, Decision, DecisionSettings};
 use crate::events::EventBus;
-use crate::github::{GitHub, GitHubError};
+use crate::github::{GitHub, GitHubError, PullRequest};
 use crate::jobs::{Job, Jobs};
 use crate::policy::{PolicyStore, Scope};
 use crate::poller::{Poller, Recheck};
@@ -273,52 +273,15 @@ impl Worker {
             return Err(e.into());
         }
 
-        let scope = Scope::parse_repo(&job.repo)?;
-        let policy = inner.policies.effective(Some(&scope)).await?;
-        let labels: Vec<String> = pr.labels.iter().map(|l| l.name.clone()).collect();
-        let checkout = inner
-            .workspace
-            .checkout(
-                job.id,
-                &job.repo,
-                job.pr_number,
-                &pr.base.ref_name,
-                &pr.base.sha,
-                &job.head_sha,
-                &token,
-            )
+        let ClaudeRun {
+            policy,
+            answer,
+            output,
+            cost,
+            duration_ms,
+        } = self
+            .run_claude(job, &pr, &reviewer, &token, budget_left)
             .await?;
-        let material = checkout.material.display().to_string().replace('\\', "/");
-        let message = prompt::first_message(
-            &PrContext {
-                repo: &job.repo,
-                number: job.pr_number,
-                title: &pr.title,
-                author: &pr.user.login,
-                description: pr.body.as_deref().unwrap_or(""),
-                base_ref: &pr.base.ref_name,
-                base_sha: &pr.base.sha,
-                head_sha: &job.head_sha,
-                changed_files: pr.changed_files,
-                additions: pr.additions,
-                deletions: pr.deletions,
-                labels: &labels,
-                reviewer: &reviewer,
-                material_dir: &material,
-            },
-            &policy,
-        );
-
-        self.emit(
-            kind::STARTED,
-            job,
-            serde_json::json!({ "policy_version_id": policy.version_id }),
-        )
-        .await;
-        let started = Instant::now();
-        let outcome = self.ask(job, &checkout, &message, budget_left).await;
-        inner.workspace.remove(&job.repo, &checkout).await;
-        let (answer, output, cost) = outcome?;
 
         let review_id = inner
             .reviews
@@ -329,7 +292,7 @@ impl Worker {
                 output: output.as_ref().map_err(String::as_str),
                 raw_answer: &answer,
                 cost_usd: cost,
-                duration_ms: started.elapsed().as_millis() as i64,
+                duration_ms,
             })
             .await?;
         let details = match &output {
@@ -378,6 +341,156 @@ impl Worker {
             output.as_ref().map_err(String::as_str),
         )
         .await
+    }
+
+    /// Checks out the PR, asks Claude with the effective policy (one repair attempt) and
+    /// returns the answer. Publishes and stores nothing.
+    async fn run_claude(
+        &self,
+        job: &Job,
+        pr: &PullRequest,
+        reviewer: &str,
+        token: &str,
+        budget: Option<f64>,
+    ) -> anyhow::Result<ClaudeRun> {
+        let inner = &self.inner;
+        let scope = Scope::parse_repo(&job.repo)?;
+        let policy = inner.policies.effective(Some(&scope)).await?;
+        let labels: Vec<String> = pr.labels.iter().map(|l| l.name.clone()).collect();
+        let checkout = inner
+            .workspace
+            .checkout(
+                job.id,
+                &job.repo,
+                job.pr_number,
+                &pr.base.ref_name,
+                &pr.base.sha,
+                &job.head_sha,
+                token,
+            )
+            .await?;
+        let material = checkout.material.display().to_string().replace('\\', "/");
+        let message = prompt::first_message(
+            &PrContext {
+                repo: &job.repo,
+                number: job.pr_number,
+                title: &pr.title,
+                author: &pr.user.login,
+                description: pr.body.as_deref().unwrap_or(""),
+                base_ref: &pr.base.ref_name,
+                base_sha: &pr.base.sha,
+                head_sha: &job.head_sha,
+                changed_files: pr.changed_files,
+                additions: pr.additions,
+                deletions: pr.deletions,
+                labels: &labels,
+                reviewer,
+                material_dir: &material,
+            },
+            &policy,
+        );
+        self.emit(
+            kind::STARTED,
+            job,
+            serde_json::json!({ "policy_version_id": policy.version_id }),
+        )
+        .await;
+        let started = Instant::now();
+        let outcome = self.ask(job, &checkout, &message, budget).await;
+        inner.workspace.remove(&job.repo, &checkout).await;
+        let (answer, output, cost) = outcome?;
+        Ok(ClaudeRun {
+            policy,
+            answer,
+            output,
+            cost,
+            duration_ms: started.elapsed().as_millis() as i64,
+        })
+    }
+
+    /// Reviews a PR exactly like a real run — same policy, prompt, checks and decision — but
+    /// posts nothing to GitHub and touches no queue. Its cost counts against the budget.
+    pub(crate) async fn dry_run(&self, repo: &str, number: u64) -> anyhow::Result<DryRun> {
+        let inner = &self.inner;
+        Scope::parse_repo(repo)?;
+        let token = inner
+            .auth
+            .token()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("connect a GitHub account first"))?;
+        let reviewer = match inner.auth.state().await {
+            crate::auth::AuthState::Connected { login, .. } => login,
+            _ => anyhow::bail!("connect a GitHub account first"),
+        };
+        let pr = inner.github.pull_request(&token, repo, number).await?;
+        // A throwaway job: negative ids never collide with real ones (checkout dirs, events).
+        let job = Job {
+            id: -(crate::events::now_ms()),
+            repo: repo.to_owned(),
+            pr_number: number,
+            head_sha: pr.head.sha.clone(),
+            title: pr.title.clone(),
+            author: pr.user.login.clone(),
+            html_url: pr.html_url.clone(),
+            status: "dry_run".into(),
+            attempts: 1,
+            error: None,
+            created_at_ms: crate::events::now_ms(),
+        };
+        let changed_lines = pr.additions + pr.deletions;
+        if changed_lines > inner.limits.max_changed_lines
+            || pr.changed_files > inner.limits.max_changed_files
+        {
+            let policy = inner
+                .policies
+                .effective(Some(&Scope::parse_repo(repo)?))
+                .await?;
+            return Ok(DryRun {
+                decision: Decision::NeedsHuman,
+                reasons: vec![decider::Reason::TooLarge {
+                    changed_lines,
+                    changed_files: pr.changed_files,
+                    max_lines: inner.limits.max_changed_lines,
+                    max_files: inner.limits.max_changed_files,
+                }],
+                review: None,
+                invalid_reason: Some("too large for an agent review".into()),
+                cost_usd: None,
+                policy_scope: policy.scope,
+                policy_version_id: policy.version_id,
+            });
+        }
+        let budget = match inner.limits.daily_budget_usd {
+            None => None,
+            Some(cap) => {
+                let (spent, _) = inner
+                    .reviews
+                    .spent_since(utc_midnight_ms(crate::events::now_ms()))
+                    .await?;
+                anyhow::ensure!(spent < cap, "today's Claude budget is used up");
+                Some(cap - spent)
+            }
+        };
+        inner.claude.locate()?;
+        let run = self
+            .run_claude(&job, &pr, &reviewer, &token, budget)
+            .await?;
+        inner.reviews.record_dry_run(repo, number, run.cost).await?;
+        let rule_ids: Vec<String> = run.policy.rules.iter().map(|r| r.id.clone()).collect();
+        let verdict = decider::decide(
+            run.output.as_ref().map_err(String::as_str),
+            &rule_ids,
+            inner.decision,
+        );
+        Ok(DryRun {
+            decision: verdict.decision,
+            reasons: verdict.reasons,
+            invalid_reason: run.output.as_ref().err().cloned(),
+            review: run.output.ok(),
+            cost_usd: run.cost,
+            policy_scope: run.policy.scope,
+            policy_version_id: run.policy.version_id,
+        })
     }
 
     /// Sends an oversized PR straight to a human: a stored NEEDS_HUMAN review with no Claude run.
@@ -645,6 +758,27 @@ const DAY_MS: i64 = 86_400_000;
 
 pub(crate) fn utc_midnight_ms(now_ms: i64) -> i64 {
     now_ms - now_ms.rem_euclid(DAY_MS)
+}
+
+/// What a run of Claude produced, before anything is stored or published.
+struct ClaudeRun {
+    policy: crate::policy::EffectivePolicy,
+    answer: String,
+    output: Result<ReviewOutput, String>,
+    cost: Option<f64>,
+    duration_ms: i64,
+}
+
+/// The result of a dry run.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct DryRun {
+    pub decision: Decision,
+    pub reasons: Vec<decider::Reason>,
+    pub review: Option<ReviewOutput>,
+    pub invalid_reason: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub policy_scope: String,
+    pub policy_version_id: i64,
 }
 
 /// Spending and size limits.

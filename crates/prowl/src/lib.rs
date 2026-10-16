@@ -2,7 +2,9 @@
 //! it works the same on the desktop and over SSH on an always-on server.
 
 pub mod app;
+pub mod policy_tab;
+mod policy_ui;
 pub mod runtime;
 pub mod ui;
 
-pub use runtime::{Options, run};
+pub use runtime::{Editor, Options, run};

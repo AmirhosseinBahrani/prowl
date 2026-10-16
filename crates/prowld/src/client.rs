@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use crate::auth::AuthState;
 use crate::events::Event;
 use crate::jobs::Job;
-use crate::policy::{EffectivePolicy, PolicyVersion, Scope};
+use crate::policy::{EffectivePolicy, PolicySummary, PolicyVersion, Scope};
 use crate::poller::PollSummary;
 use crate::power::PowerStatus;
 use crate::queue::{QueueDetail, QueueItem};
@@ -89,6 +89,18 @@ impl ApiClient {
             Some(repo) => self.get_json(&format!("/v1/policy?repo={repo}")).await,
             None => self.get_json("/v1/policy").await,
         }
+    }
+
+    /// The global policy and every per-repository override, with their files.
+    pub async fn policies(&self) -> Result<Vec<PolicySummary>, ClientError> {
+        self.get_json("/v1/policies").await
+    }
+
+    /// Reviews `repo#pr` as a real run would, publishing nothing.
+    pub async fn dry_run(&self, repo: &str, pr: u64) -> Result<crate::worker::DryRun, ClientError> {
+        let body = serde_json::json!({ "repo": repo, "pr": pr });
+        self.call_json_body(Method::POST, "/v1/dry-run", Some(body))
+            .await
     }
 
     pub async fn policy(&self, scope: &Scope) -> Result<EffectivePolicy, ClientError> {

@@ -14,6 +14,15 @@ use tokio::sync::mpsc;
 
 use crate::app::{App, Cmd, Msg, PER_PAGE, StatusBar};
 
+/// How policy files are edited.
+#[derive(Clone)]
+pub enum Editor {
+    /// Suspend the UI and run `$VISUAL` / `$EDITOR` in the terminal.
+    System,
+    /// Call this instead (tests).
+    Hook(Arc<dyn Fn(&std::path::Path) + Send + Sync>),
+}
+
 pub struct Options {
     /// The daemon home, for installing the background service.
     pub home: PathBuf,
@@ -21,6 +30,9 @@ pub struct Options {
     pub tick: Duration,
     /// If set, receives the screen as text after every draw (tests).
     pub snapshot: Option<Arc<Mutex<String>>>,
+    pub editor: Editor,
+    /// Pauses the key reader while an editor owns the terminal.
+    pub input_paused: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 pub async fn run<B: Backend>(
@@ -58,7 +70,18 @@ where
             _ = tick.tick() => Msg::Tick,
         };
         for cmd in app.update(msg) {
-            execute(cmd, &client, &tx, &options, &mut subscription);
+            match cmd {
+                // These need the terminal, so they run here rather than in a task.
+                Cmd::EditPolicy { scope } => {
+                    let result = edit_policy(terminal, &client, &options, &scope).await;
+                    let _ = tx.send(Msg::Edited(result));
+                }
+                Cmd::CreateOverride { repo } => {
+                    let result = create_override(terminal, &client, &options, &repo).await;
+                    let _ = tx.send(Msg::PolicyChanged(result));
+                }
+                cmd => execute(cmd, &client, &tx, &options, &mut subscription),
+            }
         }
     }
     if let Some(task) = subscription {
@@ -117,7 +140,39 @@ fn execute(
             }
             Cmd::LoadStatusBar => Msg::StatusBar(status_bar(&client).await),
             Cmd::InstallService => Msg::ServiceInstalled(install_service(home).await),
-            Cmd::Subscribe => unreachable!("handled above"),
+            Cmd::LoadPolicies => Msg::Policies(client.policies().await.map_err(err)),
+            Cmd::LoadPolicy { scope } => match parse_scope(&scope) {
+                Ok(scope) => Msg::Policy(client.policy(&scope).await.map_err(err)),
+                Err(e) => Msg::Policy(Err(e)),
+            },
+            Cmd::LoadVersions { scope } => match parse_scope(&scope) {
+                Ok(scope) => Msg::Versions(client.policy_versions(&scope).await.map_err(err)),
+                Err(e) => Msg::Versions(Err(e)),
+            },
+            Cmd::DeleteOverride { scope } => Msg::PolicyChanged(match parse_scope(&scope) {
+                Ok(s) => client
+                    .delete_policy(&s)
+                    .await
+                    .map(|()| format!("Deleted the override for {scope}."))
+                    .map_err(err),
+                Err(e) => Err(e),
+            }),
+            Cmd::RestorePolicy { scope, version_id } => {
+                Msg::PolicyChanged(match parse_scope(&scope) {
+                    Ok(s) => client
+                        .restore_policy(&s, version_id)
+                        .await
+                        .map(|p| format!("Restored v{version_id} as v{}.", p.version_id))
+                        .map_err(err),
+                    Err(e) => Err(e),
+                })
+            }
+            Cmd::DryRun { repo, pr } => {
+                Msg::DryRunDone(client.dry_run(&repo, pr).await.map_err(err))
+            }
+            Cmd::Subscribe | Cmd::EditPolicy { .. } | Cmd::CreateOverride { .. } => {
+                unreachable!("handled by the run loop")
+            }
         };
         let _ = tx.send(msg);
     });
@@ -179,6 +234,121 @@ async fn install_service(home: PathBuf) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn parse_scope(scope: &str) -> Result<prowld::policy::Scope, String> {
+    if scope == "global" {
+        Ok(prowld::policy::Scope::Global)
+    } else {
+        prowld::policy::Scope::parse_repo(scope).map_err(|e| e.to_string())
+    }
+}
+
+async fn create_override<B: Backend>(
+    terminal: &mut Terminal<B>,
+    client: &ApiClient,
+    options: &Options,
+    repo: &str,
+) -> Result<String, String>
+where
+    B::Error: Send + Sync + 'static,
+{
+    let scope = prowld::policy::Scope::parse_repo(repo).map_err(|e| e.to_string())?;
+    let global = client
+        .policy(&prowld::policy::Scope::Global)
+        .await
+        .map_err(|e| e.to_string())?;
+    client
+        .save_policy(&scope, &global.content)
+        .await
+        .map_err(|e| e.to_string())?;
+    edit_policy(terminal, client, options, repo).await?;
+    Ok(format!(
+        "Created an override for {repo}, starting from the global policy."
+    ))
+}
+
+async fn edit_policy<B: Backend>(
+    terminal: &mut Terminal<B>,
+    client: &ApiClient,
+    options: &Options,
+    scope: &str,
+) -> Result<(), String>
+where
+    B::Error: Send + Sync + 'static,
+{
+    let list = client.policies().await.map_err(|e| e.to_string())?;
+    let path = list
+        .into_iter()
+        .find(|p| p.scope == scope)
+        .map(|p| PathBuf::from(p.path))
+        .ok_or_else(|| format!("no policy file for {scope}"))?;
+    match &options.editor {
+        Editor::Hook(hook) => hook(&path),
+        Editor::System => {
+            if let Some(paused) = &options.input_paused {
+                let _ = paused.send(true);
+            }
+            let result = run_system_editor(&path);
+            if let Some(paused) = &options.input_paused {
+                let _ = paused.send(false);
+            }
+            terminal.clear().map_err(|e| e.to_string())?;
+            result?;
+        }
+    }
+    // Reading the policy makes the daemon pick up the edit straight away.
+    client
+        .policy(&parse_scope(scope)?)
+        .await
+        .map(drop)
+        .map_err(|e| e.to_string())
+}
+
+/// Hands the terminal to `$VISUAL` / `$EDITOR` (falling back to a common default) and takes
+/// it back afterwards.
+fn run_system_editor(path: &std::path::Path) -> Result<(), String> {
+    use crossterm::execute;
+    use crossterm::terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    };
+
+    let configured = std::env::var("VISUAL")
+        .ok()
+        .or_else(|| std::env::var("EDITOR").ok())
+        .filter(|e| !e.trim().is_empty());
+    let command = configured.unwrap_or_else(|| {
+        if cfg!(windows) {
+            "notepad".into()
+        } else if which_exists("nano") {
+            "nano".into()
+        } else {
+            "vi".into()
+        }
+    });
+    let mut parts = command.split_whitespace();
+    let program = parts.next().ok_or("no editor configured")?;
+    let args: Vec<&str> = parts.collect();
+
+    let mut stdout = std::io::stdout();
+    let _ = disable_raw_mode();
+    let _ = execute!(stdout, LeaveAlternateScreen, crossterm::cursor::Show);
+    let status = std::process::Command::new(program)
+        .args(&args)
+        .arg(path)
+        .status();
+    let _ = execute!(stdout, EnterAlternateScreen, crossterm::cursor::Hide);
+    let _ = enable_raw_mode();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(format!("{program} exited with {s}")),
+        Err(e) => Err(format!("could not start {program}: {e} (set $EDITOR)")),
+    }
+}
+
+fn which_exists(program: &str) -> bool {
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
 }
 
 /// The screen as plain text, one line per row.
