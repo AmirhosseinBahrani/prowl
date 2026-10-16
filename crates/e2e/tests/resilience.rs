@@ -273,3 +273,38 @@ async fn markers_planted_by_someone_else_are_ignored() {
     );
     h.shutdown().await.unwrap();
 }
+
+/// Killing git during `worktree add` leaves the checkout path registered and locked. A later
+/// review that gets the same path must still be able to check out.
+#[tokio::test]
+async fn a_stale_locked_worktree_does_not_block_reviews() {
+    let (h, commits) = setup(&[7]).await;
+    h.claude
+        .respond_with(vec![ClaudeResponse::review(&calm_review())])
+        .unwrap();
+    h.client().poll_now().await.unwrap();
+    wait_for_job(&h, finished("done")).await;
+
+    // Plant what an interrupted checkout leaves behind at the next job's path.
+    let home = h.daemon().home().to_path_buf();
+    let bare = home.join("git/acme/api.git");
+    let next = home.join("wt/2");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&bare)
+        .args(["worktree", "add", "--lock", "--detach"])
+        .arg(&next)
+        .arg(&commits[0].head_sha)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    std::fs::remove_dir_all(&next).unwrap();
+
+    push_new_commit(&h, 7, &["octo"]);
+    h.client().poll_now().await.unwrap();
+    wait_for_reviews(&h, 7, 2).await;
+
+    let jobs = h.client().jobs().await.unwrap();
+    assert!(jobs.iter().all(|j| j.status == "done"), "{jobs:?}");
+    h.shutdown().await.unwrap();
+}
