@@ -26,6 +26,24 @@ enum Command {
     Login,
     /// Disconnect the GitHub account and delete its stored token.
     Logout,
+    /// Manage the per-user background service that keeps prowld running.
+    Service {
+        #[command(subcommand)]
+        action: ServiceAction,
+        /// Service name, to run more than one install side by side.
+        #[arg(long, default_value = prowld::service::DEFAULT_NAME, global = true)]
+        name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceAction {
+    /// Install and start the service; it then starts at every login.
+    Install,
+    /// Stop and remove the service.
+    Uninstall,
+    /// Show whether the service is installed and running.
+    Status,
 }
 
 #[tokio::main]
@@ -49,6 +67,17 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Login => login(&ApiClient::for_home(&home)?).await,
+        Command::Service { action, name } => {
+            use prowld::service::{self, ServiceSpec};
+            let spec = ServiceSpec::beside_current_exe(&name, &home)?;
+            let status = match action {
+                ServiceAction::Install => service::install(&spec)?,
+                ServiceAction::Uninstall => service::uninstall(&spec)?,
+                ServiceAction::Status => service::status(&spec)?,
+            };
+            println!("{}", serde_json::to_string_pretty(&status)?);
+            Ok(())
+        }
         Command::Logout => {
             ApiClient::for_home(&home)?.disconnect().await?;
             println!("GitHub account disconnected.");
