@@ -178,6 +178,15 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     });
     worker.spawn(shutdown.clone());
 
+    if config.notifications {
+        let notifier = config
+            .notifier
+            .clone()
+            .map(|hook| hook.0)
+            .unwrap_or_else(|| Arc::new(crate::notify::Desktop));
+        crate::notify::spawn(&events, notifier, shutdown.clone());
+    }
+
     let state = AppState {
         auth: auth.clone(),
         policies,

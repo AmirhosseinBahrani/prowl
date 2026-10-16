@@ -40,6 +40,8 @@ struct Inner {
     query_routes: Vec<(Method, String, String, (StatusCode, serde_json::Value))>,
     /// `(remaining, reset_at)` sent as X-RateLimit headers on every response.
     rate_limit: Option<(u64, u64)>,
+    /// Unified diffs served for `Accept: application/vnd.github.diff`, by path.
+    diffs: HashMap<String, String>,
     requests: Vec<RecordedRequest>,
 }
 
@@ -104,6 +106,15 @@ impl FakeGitHub {
         ));
     }
 
+    /// Serves `diff` for `GET path` when the client asks for a diff.
+    pub fn route_diff(&self, path: &str, diff: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .diffs
+            .insert(path.to_owned(), diff.to_owned());
+    }
+
     /// Reports this rate limit on every response from now on.
     pub fn set_rate_limit(&self, remaining: u64, reset_at: u64) {
         self.inner.lock().unwrap().rate_limit = Some((remaining, reset_at));
@@ -143,6 +154,20 @@ async fn handle(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
         .unwrap_or_default();
 
     let mut inner = inner.lock().unwrap();
+    if headers.get("accept").map(String::as_str) == Some("application/vnd.github.diff")
+        && let Some(diff) = inner.diffs.get(&path).cloned()
+    {
+        inner.requests.push(RecordedRequest {
+            method,
+            path,
+            query,
+            body: None,
+            raw_body: String::new(),
+            headers,
+            status: 200,
+        });
+        return (StatusCode::OK, diff).into_response();
+    }
     let query_string = query.clone().unwrap_or_default();
     let scripted = inner
         .query_routes

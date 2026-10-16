@@ -8,7 +8,7 @@ mod git_remote;
 
 pub use fake_claude::{ClaudeInvocation, ClaudeResponse, FakeClaude};
 pub use fake_github::{FakeGitHub, RecordedRequest};
-pub use fake_power::FakePower;
+pub use fake_power::{FakeNotifier, FakePower};
 pub use git_remote::{GitRemote, PrCommits};
 
 use prowld::{ApiClient, Config, CredentialBackend, RunningDaemon};
@@ -21,6 +21,7 @@ pub struct Harness {
     pub claude: FakeClaude,
     pub git: GitRemote,
     pub power: std::sync::Arc<FakePower>,
+    pub notifications: std::sync::Arc<FakeNotifier>,
     daemon: Option<RunningDaemon>,
     home: TempDir,
 }
@@ -32,12 +33,21 @@ impl Harness {
         let claude = FakeClaude::new(home.path().join("fake-claude"))?;
         let git = GitRemote::new(home.path().join("remotes"))?;
         let power = std::sync::Arc::new(FakePower::laptop());
-        let daemon = prowld::start(Self::config(home.path(), &github, &claude, &power)).await?;
+        let notifications = std::sync::Arc::new(FakeNotifier::default());
+        let daemon = prowld::start(Self::config(
+            home.path(),
+            &github,
+            &claude,
+            &power,
+            &notifications,
+        ))
+        .await?;
         Ok(Self {
             github,
             claude,
             git,
             power,
+            notifications,
             daemon: Some(daemon),
             home,
         })
@@ -48,6 +58,7 @@ impl Harness {
         github: &FakeGitHub,
         claude: &FakeClaude,
         power: &std::sync::Arc<FakePower>,
+        notifications: &std::sync::Arc<FakeNotifier>,
     ) -> Config {
         let mut config = Config::new(home.join("home"));
         config.github_api_url = github.url();
@@ -61,6 +72,8 @@ impl Harness {
         config.retry_base = std::time::Duration::from_millis(20);
         // Never take real sleep assertions on the machine running the tests.
         config.power = Some(prowld::PowerHook(power.clone()));
+        // Never show real desktop notifications from tests.
+        config.notifier = Some(prowld::NotifierHook(notifications.clone()));
         config.power_check_interval = std::time::Duration::from_millis(50);
         config.wake_gap = std::time::Duration::from_secs(1);
         config.claude_bin = Some(claude.bin());
@@ -86,7 +99,13 @@ impl Harness {
         if let Some(daemon) = self.daemon.take() {
             daemon.shutdown().await?;
         }
-        let config = Self::config(self.home.path(), &self.github, &self.claude, &self.power);
+        let config = Self::config(
+            self.home.path(),
+            &self.github,
+            &self.claude,
+            &self.power,
+            &self.notifications,
+        );
         self.daemon = Some(prowld::start(config).await?);
         Ok(())
     }
@@ -96,7 +115,13 @@ impl Harness {
         if let Some(daemon) = self.daemon.take() {
             daemon.shutdown().await?;
         }
-        let mut config = Self::config(self.home.path(), &self.github, &self.claude, &self.power);
+        let mut config = Self::config(
+            self.home.path(),
+            &self.github,
+            &self.claude,
+            &self.power,
+            &self.notifications,
+        );
         edit(&mut config);
         self.daemon = Some(prowld::start(config).await?);
         Ok(())

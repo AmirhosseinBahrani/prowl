@@ -518,3 +518,102 @@ async fn history_lists_reviews_with_details_and_opens_them() {
     tui.quit().await;
     h.shutdown().await.unwrap();
 }
+
+/// A PR waiting for a human (#7) and the TUI on the Queue tab.
+async fn with_a_queued_pr() -> (Harness, Tui) {
+    let (h, _) = common::setup(&[7]).await;
+    h.github.route_diff(
+        "/repos/acme/api/pulls/7",
+        "diff --git a/src/a.rs b/src/a.rs\n@@ -0,0 +1 @@\n+fn a() {}\ndiff --git a/src/login_7.rs b/src/login_7.rs\n@@ -0,0 +1 @@\n+fn login() {}\n",
+    );
+    h.claude
+        .respond_with(vec![prowl_e2e::ClaudeResponse::review(
+            &common::valid_review(),
+        )])
+        .unwrap();
+    h.client().poll_now().await.unwrap();
+    let tui = Tui::of(&h);
+    tui.wait_for("1 Queue").await;
+    tui.wait_for("acme/api#7").await;
+    (h, tui)
+}
+
+#[tokio::test]
+async fn the_queue_tab_shows_why_a_pr_waits_and_its_diff() {
+    let (h, tui) = with_a_queued_pr().await;
+    assert!(tui.screen().contains("medium"));
+    assert!(tui.screen().contains("[AUTH]"));
+    tui.wait_for("1 awaiting you").await;
+
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Waiting for you because:").await;
+    tui.wait_for("matched [AUTH] src/login.rs:1").await;
+    tui.wait_for("Agent's summary: Adds a login rate limit.")
+        .await;
+    tui.wait_for("+fn a() {}").await;
+    tui.press(KeyCode::Char(']'));
+    tui.wait_for("diff --git a/src/login_7.rs").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tui.screen().contains("+fn a() {}") {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "] should jump to the next file"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tui.press(KeyCode::Esc);
+    tui.wait_for("severity").await;
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn approving_from_the_queue_tab_posts_your_review() {
+    let (h, tui) = with_a_queued_pr().await;
+
+    tui.press(KeyCode::Char('a'));
+    tui.wait_for("approve — optional comment").await;
+    tui.type_text("LGTM");
+    tui.press(KeyCode::Enter);
+
+    tui.wait_for("Approved acme/api#7.").await;
+    tui.wait_for("Nothing is waiting for you").await;
+    let review = &h
+        .github
+        .requests_to(Method::POST, "/repos/acme/api/pulls/7/reviews")[0];
+    assert_eq!(review.body.as_ref().unwrap()["event"], "APPROVE");
+    assert_eq!(review.body.as_ref().unwrap()["body"], "LGTM");
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn requesting_changes_and_dismissing_from_the_queue_tab() {
+    let (h, tui) = with_a_queued_pr().await;
+
+    tui.press(KeyCode::Char('r'));
+    tui.press(KeyCode::Enter);
+    tui.wait_for("a comment is required").await;
+    tui.type_text("Add tests");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Requested changes on acme/api#7.").await;
+    let review = &h
+        .github
+        .requests_to(Method::POST, "/repos/acme/api/pulls/7/reviews")[0];
+    assert_eq!(review.body.as_ref().unwrap()["event"], "REQUEST_CHANGES");
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+
+    let (h, tui) = with_a_queued_pr().await;
+    tui.press(KeyCode::Char('d'));
+    tui.wait_for("Remove it from your queue").await;
+    tui.press(KeyCode::Char('y'));
+    tui.wait_for("Dismissed acme/api#7.").await;
+    assert!(
+        h.github
+            .requests_to(Method::POST, "/repos/acme/api/pulls/7/reviews")
+            .is_empty()
+    );
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}

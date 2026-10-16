@@ -9,6 +9,7 @@ use prowld::{
 use crate::feed_tab::FeedTab;
 use crate::history_tab::HistoryTab;
 use crate::policy_tab::{DryRunState, PolicyTab};
+use crate::queue_tab::{QueueAction, QueueTab};
 
 pub const PER_PAGE: usize = 15;
 
@@ -107,6 +108,14 @@ pub enum Msg {
     RecentEvents(Result<Vec<Event>, String>),
     Reviews(Result<Vec<prowld::Review>, String>),
     Opened(Result<(), String>),
+    QueueItems(Result<Vec<prowld::QueueItem>, String>),
+    QueueDetail(Result<prowld::QueueDetail, String>),
+    Resolved {
+        repo: String,
+        number: u64,
+        action: QueueAction,
+        result: Result<prowld::QueueItem, String>,
+    },
 }
 
 /// Work for the runtime to do; it answers with a [`Msg`].
@@ -161,6 +170,17 @@ pub enum Cmd {
     OpenUrl {
         url: String,
     },
+    LoadQueue,
+    LoadQueueItem {
+        repo: String,
+        number: u64,
+    },
+    Resolve {
+        repo: String,
+        number: u64,
+        action: QueueAction,
+        comment: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +194,7 @@ pub struct App {
     pub repos: RepoPicker,
     pub policy: PolicyTab,
     pub feed: FeedTab,
+    pub queue: QueueTab,
     pub history: HistoryTab,
     pub status: StatusBar,
     /// A one-line message shown above the status bar.
@@ -196,6 +217,7 @@ impl App {
             repos: RepoPicker::default(),
             policy: PolicyTab::default(),
             feed: FeedTab::default(),
+            queue: QueueTab::default(),
             history: HistoryTab::default(),
             status: StatusBar::default(),
             notice: None,
@@ -259,7 +281,7 @@ impl App {
                     self.load_repos(false)
                 } else {
                     self.screen = Screen::Main;
-                    vec![Cmd::LoadStatusBar]
+                    vec![Cmd::LoadStatusBar, Cmd::LoadQueue]
                 }
             }
             Msg::WatchedCount(Err(e)) => self.lost(e),
@@ -354,6 +376,34 @@ impl App {
                 vec![]
             }
             Msg::Opened(Ok(())) => vec![],
+            Msg::QueueItems(Ok(items)) => {
+                self.queue.on_items(items);
+                vec![]
+            }
+            Msg::QueueDetail(Ok(detail)) => {
+                self.queue.diff_scroll = 0;
+                self.queue.detail = Some(detail);
+                vec![]
+            }
+            Msg::Resolved {
+                repo,
+                number,
+                action,
+                result: Ok(_),
+            } => {
+                self.queue.on_resolved(&repo, number);
+                self.notice = Some(format!("{} {repo}#{number}.", action.past_tense()));
+                vec![Cmd::LoadQueue, Cmd::LoadStatusBar]
+            }
+            Msg::Resolved { result: Err(e), .. } => {
+                self.queue.busy = false;
+                self.queue.error = Some(e);
+                vec![]
+            }
+            Msg::QueueItems(Err(e)) | Msg::QueueDetail(Err(e)) => {
+                self.notice = Some(e);
+                vec![]
+            }
             Msg::RecentEvents(Err(e)) | Msg::Reviews(Err(e)) | Msg::Opened(Err(e)) => {
                 self.notice = Some(e);
                 vec![]
@@ -382,6 +432,9 @@ impl App {
             && matches!(event.kind.as_str(), "review.decided" | "review.published")
         {
             cmds.push(Cmd::LoadReviews);
+        }
+        if event.kind.starts_with("queue.") {
+            cmds.push(Cmd::LoadQueue);
         }
         cmds
     }
@@ -423,6 +476,7 @@ impl App {
                 Tab::Policy if self.policy.captures_keys() => return self.policy.on_key(key),
                 Tab::Feed if self.feed.captures_keys() => return self.feed.on_key(key),
                 Tab::History if self.history.captures_keys() => return self.history.on_key(key),
+                Tab::Queue if self.queue.captures_keys() => return self.queue.on_key(key),
                 _ => {}
             }
         }
@@ -484,7 +538,7 @@ impl App {
                     self.onboarding = false;
                     self.screen = Screen::Main;
                     self.tab = Tab::Queue;
-                    vec![Cmd::LoadStatusBar]
+                    vec![Cmd::LoadStatusBar, Cmd::LoadQueue]
                 }
                 _ => vec![],
             },
@@ -508,6 +562,7 @@ impl App {
                 Tab::Policy => vec![Cmd::LoadPolicies],
                 Tab::Feed if !self.feed.loaded => vec![Cmd::LoadRecentEvents],
                 Tab::History => vec![Cmd::LoadReviews],
+                Tab::Queue => vec![Cmd::LoadQueue],
                 _ => vec![],
             };
         }
@@ -516,6 +571,7 @@ impl App {
             Tab::Policy => return self.policy.on_key(key),
             Tab::Feed => return self.feed.on_key(key),
             Tab::History => return self.history.on_key(key),
+            Tab::Queue => return self.queue.on_key(key),
             _ => {}
         }
         vec![]

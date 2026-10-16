@@ -644,7 +644,13 @@ impl Worker {
         if verdict.decision == Decision::NeedsHuman {
             inner
                 .queue
-                .add(&job.repo, job.pr_number, &job.head_sha, review_id)
+                .add(
+                    &job.repo,
+                    job.pr_number,
+                    &job.head_sha,
+                    review_id,
+                    &job.title,
+                )
                 .await?;
         } else {
             // A newer commit no longer needs a human: it leaves the queue.

@@ -1,0 +1,54 @@
+//! Non-interactive commands for scripts and quick checks: `prowl queue`, `prowl approve`, …
+
+use prowld::ApiClient;
+
+use crate::policy_tab::parse_pr_ref;
+use crate::policy_ui::reason_text;
+use crate::queue_tab::QueueAction;
+
+/// The Human Review Queue as plain text, riskiest first.
+pub async fn queue(client: &ApiClient) -> anyhow::Result<String> {
+    let items = client.queue().await?;
+    if items.is_empty() {
+        return Ok("Nothing is waiting for your review.\n".into());
+    }
+    let mut out = String::new();
+    for item in items {
+        let severity = item
+            .severity
+            .map(|s| format!("{s:?}").to_lowercase())
+            .unwrap_or_else(|| "unusable".into());
+        out.push_str(&format!(
+            "{}#{}  [{severity}]  {}\n",
+            item.repo, item.pr_number, item.title
+        ));
+        for reason in &item.reasons {
+            out.push_str(&format!("    {}\n", reason_text(reason)));
+        }
+        out.push_str(&format!("    {}\n", item.html_url));
+    }
+    Ok(out)
+}
+
+/// Approves, requests changes on, or dismisses `owner/repo#n` from the queue.
+pub async fn resolve(
+    client: &ApiClient,
+    pr: &str,
+    action: QueueAction,
+    message: &str,
+) -> anyhow::Result<String> {
+    let (repo, number) = parse_pr_ref(pr)
+        .ok_or_else(|| anyhow::anyhow!("expected owner/repo#number, got {pr:?}"))?;
+    match action {
+        QueueAction::Approve => client.approve(&repo, number, message).await?,
+        QueueAction::RequestChanges => {
+            anyhow::ensure!(
+                !message.trim().is_empty(),
+                "say what needs to change with -m"
+            );
+            client.request_changes(&repo, number, message).await?
+        }
+        QueueAction::Dismiss => client.dismiss(&repo, number).await?,
+    };
+    Ok(format!("{} {repo}#{number}.\n", action.past_tense()))
+}

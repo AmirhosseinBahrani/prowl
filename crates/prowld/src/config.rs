@@ -54,6 +54,10 @@ pub struct Config {
     pub max_changed_lines: u64,
     /// Likewise for the number of changed files.
     pub max_changed_files: u64,
+    /// Send desktop notifications (PR needs you, review failed, …).
+    pub notifications: bool,
+    /// Replaces the OS notification service (tests).
+    pub notifier: Option<crate::notify::NotifierHook>,
     /// When to keep the machine awake; `None` picks `ac_only` with a battery, else `always`.
     pub sleep_mode: Option<crate::power::SleepMode>,
     /// Replaces the OS power integration (tests).
@@ -94,6 +98,8 @@ impl Config {
             daily_budget_usd: None,
             max_changed_lines: 3000,
             max_changed_files: 100,
+            notifications: true,
+            notifier: None,
             sleep_mode: None,
             power: None,
             power_check_interval: Duration::from_secs(5),

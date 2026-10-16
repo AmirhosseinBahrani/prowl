@@ -308,12 +308,12 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
         Tab::Repos => repo_picker(app, frame, inner, false),
         Tab::Policy => crate::policy_ui::draw(&app.policy, frame, inner),
         Tab::Feed => crate::feed_ui::draw_feed(&app.feed, frame, inner),
+        Tab::Queue => crate::queue_ui::draw(&app.queue, frame, inner),
         Tab::History => crate::feed_ui::draw_history(&app.history, &app.status, frame, inner),
         other => {
             let what = match other {
-                Tab::Queue => "the Human Review Queue",
                 Tab::Settings => "settings",
-                Tab::Repos | Tab::Policy | Tab::Feed | Tab::History => unreachable!(),
+                Tab::Repos | Tab::Policy | Tab::Feed | Tab::History | Tab::Queue => unreachable!(),
             };
             frame.render_widget(
                 Paragraph::new(Text::from(format!("  Coming soon: {what}."))).dim(),
@@ -379,6 +379,8 @@ fn help(frame: &mut Frame, area: Rect) {
         Line::from("  ↑↓ or j k         move"),
         Line::from("  /                 search (esc to finish)"),
         Line::from("  space             watch / unwatch a repository"),
+        Line::from("  Queue tab: enter open · a approve · r request changes · d dismiss · o open"),
+        Line::from("             in a PR: ↑↓ scroll diff · ] [ next/previous file · esc back"),
         Line::from("  Feed tab: space pause/follow · f filter · c clear · p show polls"),
         Line::from("  History tab: enter details · o open on GitHub · f filter"),
         Line::from("  Policy tab: e edit · h history · r restore · n new override"),
