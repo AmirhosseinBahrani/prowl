@@ -16,6 +16,7 @@ use crate::jobs::Job;
 use crate::policy::{EffectivePolicy, PolicyVersion, Scope};
 use crate::poller::PollSummary;
 use crate::repos::{Repo, RepoPage, RepoQuery};
+use crate::reviews::Review;
 use crate::server::Status;
 use crate::transport::{self, Endpoint};
 
@@ -145,6 +146,13 @@ impl ApiClient {
     /// Polls GitHub for review requests now and returns what happened.
     pub async fn poll_now(&self) -> Result<PollSummary, ClientError> {
         self.call_json(Method::POST, "/v1/poll").await
+    }
+
+    pub async fn reviews(&self, job_id: Option<i64>) -> Result<Vec<Review>, ClientError> {
+        match job_id {
+            Some(id) => self.get_json(&format!("/v1/reviews?job_id={id}")).await,
+            None => self.get_json("/v1/reviews").await,
+        }
     }
 
     pub async fn jobs(&self) -> Result<Vec<Job>, ClientError> {

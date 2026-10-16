@@ -32,6 +32,16 @@ pub struct Config {
     /// Count review requests made to one of the user's teams, not only direct ones.
     pub include_team_requests: bool,
     pub skip_drafts: bool,
+    /// Base URL repositories are cloned from (`<base>/<owner>/<repo>.git`).
+    pub git_base_url: String,
+    /// Model passed to `claude --model`; `None` uses the CLI's default.
+    pub claude_model: Option<String>,
+    /// Reviews running at the same time.
+    pub review_concurrency: usize,
+    /// A review still running after this long is stopped and marked failed.
+    pub review_timeout: Duration,
+    /// Spend cap per Claude run, passed to `claude --max-budget-usd`.
+    pub review_budget_usd: Option<f64>,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -53,6 +63,11 @@ impl Config {
             poll_interval: Duration::from_secs(60),
             include_team_requests: false,
             skip_drafts: true,
+            git_base_url: "https://github.com".into(),
+            claude_model: None,
+            review_concurrency: 2,
+            review_timeout: Duration::from_secs(15 * 60),
+            review_budget_usd: None,
             claude_bin: None,
             claude_env: Vec::new(),
         }

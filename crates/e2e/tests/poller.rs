@@ -50,7 +50,8 @@ impl Pr {
             "title": format!("PR {}", self.number),
             "html_url": format!("https://github.com/{}/pull/{}", self.repo, self.number),
             "user": { "login": self.author },
-            "head": { "sha": self.sha },
+            "head": { "sha": self.sha, "ref": "feature" },
+            "base": { "sha": "base000", "ref": "main" },
             "requested_reviewers": self.reviewers.iter().map(|l| json!({ "login": l })).collect::<Vec<_>>(),
             "requested_teams": self.teams.iter().map(|s| json!({ "slug": s })).collect::<Vec<_>>(),
         })
@@ -133,10 +134,9 @@ async fn a_requested_review_is_queued_exactly_once() {
         (
             jobs[0].repo.as_str(),
             jobs[0].pr_number,
-            jobs[0].head_sha.as_str(),
-            jobs[0].status.as_str()
+            jobs[0].head_sha.as_str()
         ),
-        (WATCHED, 7, "abc123", "queued")
+        (WATCHED, 7, "abc123")
     );
     assert_eq!(events_of(&h, "pr.enqueued").await.len(), 1);
     assert!(

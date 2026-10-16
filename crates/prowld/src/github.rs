@@ -107,7 +107,18 @@ pub(crate) struct PullRequest {
     pub title: String,
     pub html_url: String,
     pub user: ApiOwner,
+    #[serde(default)]
+    pub body: Option<String>,
     pub head: GitRef,
+    pub base: GitRef,
+    #[serde(default)]
+    pub additions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    #[serde(default)]
+    pub changed_files: u64,
+    #[serde(default)]
+    pub labels: Vec<Label>,
     #[serde(default)]
     pub requested_reviewers: Vec<ApiOwner>,
     #[serde(default)]
@@ -117,6 +128,13 @@ pub(crate) struct PullRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct GitRef {
     pub sha: String,
+    #[serde(rename = "ref", default)]
+    pub ref_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Label {
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
