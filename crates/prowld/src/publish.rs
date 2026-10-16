@@ -133,9 +133,11 @@ pub(crate) async fn publish_result(
                 .await?
                 .into_iter()
                 .find(|r| {
-                    r.body
-                        .as_deref()
-                        .is_some_and(|b| b.contains(&marker(target)))
+                    // Anyone can paste a marker into a review; only ours count.
+                    authored_by(r.user.as_ref(), target.reviewer)
+                        && r.body
+                            .as_deref()
+                            .is_some_and(|b| b.contains(&marker(target)))
                 });
             let posted = match already {
                 Some(r) => {
@@ -185,9 +187,10 @@ pub(crate) async fn publish_result(
                     .await?
                     .into_iter()
                     .find(|c| {
-                        c.body.as_deref().is_some_and(|b| {
-                            b.contains(&pr_marker) && b.contains("Waiting for human approval")
-                        })
+                        authored_by(c.user.as_ref(), target.reviewer)
+                            && c.body.as_deref().is_some_and(|b| {
+                                b.contains(&pr_marker) && b.contains("Waiting for human approval")
+                            })
                     })
                     .map(|c| (c.id, c.html_url));
             }
@@ -225,6 +228,11 @@ pub(crate) async fn publish_result(
             Ok(comment)
         }
     }
+}
+
+/// Whether a GitHub post was written by `login` — the account PRowl posts as.
+fn authored_by(user: Option<&crate::github::ApiOwner>, login: &str) -> bool {
+    user.is_some_and(|u| u.login.eq_ignore_ascii_case(login))
 }
 
 /// Treats "it's gone" (someone deleted it) as nothing to update.

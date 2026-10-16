@@ -192,6 +192,7 @@ pub(crate) struct SubmittedReview {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct IssueComment {
     pub id: i64,
+    pub user: Option<ApiOwner>,
     #[serde(default)]
     pub body: Option<String>,
     pub html_url: String,
