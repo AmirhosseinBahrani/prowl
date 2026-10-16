@@ -3,9 +3,11 @@
 
 mod fake_claude;
 mod fake_github;
+mod git_remote;
 
 pub use fake_claude::{ClaudeInvocation, ClaudeResponse, FakeClaude};
 pub use fake_github::{FakeGitHub, RecordedRequest};
+pub use git_remote::{GitRemote, PrCommits};
 
 use prowld::{ApiClient, Config, CredentialBackend, RunningDaemon};
 use tempfile::TempDir;
@@ -15,6 +17,7 @@ pub const TEST_CLIENT_ID: &str = "Iv1.testclient";
 pub struct Harness {
     pub github: FakeGitHub,
     pub claude: FakeClaude,
+    pub git: GitRemote,
     daemon: Option<RunningDaemon>,
     home: TempDir,
 }
@@ -24,10 +27,12 @@ impl Harness {
         let home = tempfile::Builder::new().prefix("prowl-").tempdir()?;
         let github = FakeGitHub::start().await?;
         let claude = FakeClaude::new(home.path().join("fake-claude"))?;
+        let git = GitRemote::new(home.path().join("remotes"))?;
         let daemon = prowld::start(Self::config(home.path(), &github, &claude)).await?;
         Ok(Self {
             github,
             claude,
+            git,
             daemon: Some(daemon),
             home,
         })
@@ -45,6 +50,11 @@ impl Harness {
         config.poll_interval = std::time::Duration::from_secs(3600);
         config.claude_bin = Some(claude.bin());
         config.claude_env = claude.env();
+        config.git_base_url = home
+            .join("remotes")
+            .display()
+            .to_string()
+            .replace('\\', "/");
         config
     }
 

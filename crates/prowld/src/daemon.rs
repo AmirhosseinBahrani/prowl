@@ -6,6 +6,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::Auth;
+use crate::claude::{Claude, ClaudeSettings};
 use crate::client::ApiClient;
 use crate::config::{self, Config};
 use crate::credentials::CredentialStore;
@@ -15,9 +16,12 @@ use crate::jobs::Jobs;
 use crate::policy::PolicyStore;
 use crate::poller::{PollSettings, Poller};
 use crate::repos::Repos;
+use crate::reviews::Reviews;
 use crate::server::{self, AppState};
 use crate::store;
 use crate::transport::{self, Endpoint};
+use crate::worker::{Worker, WorkerParts};
+use crate::workspace::Workspace;
 
 /// A daemon running inside the current process.
 pub struct RunningDaemon {
@@ -108,11 +112,42 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     );
     poller.spawn(config.poll_interval, shutdown.clone());
 
+    // Anything left running by a crash or shutdown goes back in the queue, with a clean checkout.
+    let interrupted = jobs.mark_interrupted().await?;
+    let workspace = Workspace::new(&config.home, &config.git_base_url);
+    workspace.remove_all_worktrees().await;
+    if interrupted > 0 {
+        tracing::info!(
+            interrupted,
+            "re-queued reviews interrupted by the last shutdown"
+        );
+    }
+    let reviews = Reviews::new(db.clone());
+    Worker::new(WorkerParts {
+        jobs: jobs.clone(),
+        reviews: reviews.clone(),
+        poller: poller.clone(),
+        auth: auth.clone(),
+        policies: policies.clone(),
+        workspace,
+        claude: Claude::new(ClaudeSettings {
+            bin: config.claude_bin.clone(),
+            env: config.claude_env.clone(),
+            model: config.claude_model.clone(),
+            timeout: config.review_timeout,
+            max_budget_usd: config.review_budget_usd,
+        }),
+        events: events.clone(),
+        concurrency: config.review_concurrency,
+    })
+    .spawn(shutdown.clone());
+
     let state = AppState {
         auth: auth.clone(),
         policies,
         repos,
         jobs,
+        reviews,
         poller,
         token: token.clone(),
         events: events.clone(),

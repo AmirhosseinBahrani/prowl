@@ -24,11 +24,63 @@ pub struct ClaudeInvocation {
     pub args: Vec<String>,
     pub stdin: String,
     pub cwd: PathBuf,
+    /// Files at the top of `cwd` when the CLI started.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// `git rev-parse HEAD` in `cwd`, if it is a git checkout.
+    #[serde(default)]
+    pub git_head: Option<String>,
+}
+
+impl ClaudeInvocation {
+    /// The value following `flag` on the command line.
+    pub fn arg_after(&self, flag: &str) -> Option<&str> {
+        let i = self.args.iter().position(|a| a == flag)?;
+        self.args.get(i + 1).map(String::as_str)
+    }
+
+    /// Every value following `flag` until the next `--flag`.
+    pub fn args_after(&self, flag: &str) -> Vec<&str> {
+        let Some(i) = self.args.iter().position(|a| a == flag) else {
+            return Vec::new();
+        };
+        self.args[i + 1..]
+            .iter()
+            .take_while(|a| !a.starts_with("--"))
+            .map(String::as_str)
+            .collect()
+    }
 }
 
 /// Handle on the `fake-claude` binary. Responses are consumed in order; the last one repeats.
 pub struct FakeClaude {
     dir: PathBuf,
+}
+
+impl ClaudeResponse {
+    /// A successful run in `stream-json` format whose final answer is `answer`.
+    pub fn answer(answer: &str) -> Self {
+        let lines = [
+            serde_json::json!({ "type": "system", "subtype": "init", "session_id": "session-1" }),
+            serde_json::json!({
+                "type": "assistant", "session_id": "session-1",
+                "message": { "content": [{ "type": "text", "text": "Reading the diff…" }] }
+            }),
+            serde_json::json!({
+                "type": "result", "subtype": "success", "is_error": false, "result": answer,
+                "session_id": "session-1", "total_cost_usd": 0.05
+            }),
+        ];
+        Self {
+            stdout: lines.iter().map(|l| format!("{l}\n")).collect(),
+            ..Default::default()
+        }
+    }
+
+    /// A successful run answering with this review JSON.
+    pub fn review(review: &serde_json::Value) -> Self {
+        Self::answer(&review.to_string())
+    }
 }
 
 impl FakeClaude {

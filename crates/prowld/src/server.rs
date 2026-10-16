@@ -19,6 +19,7 @@ use crate::jobs::{Job, Jobs};
 use crate::policy::PolicyStore;
 use crate::poller::{PollSummary, Poller};
 use crate::repos::Repos;
+use crate::reviews::{Review, Reviews};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -26,6 +27,7 @@ pub(crate) struct AppState {
     pub policies: PolicyStore,
     pub repos: Repos,
     pub jobs: Jobs,
+    pub reviews: Reviews,
     pub poller: Poller,
     pub token: String,
     pub events: EventBus,
@@ -51,6 +53,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/auth/device", post(start_device_flow))
         .route("/v1/poll", post(poll_now))
         .route("/v1/jobs", get(list_jobs))
+        .route("/v1/reviews", get(list_reviews))
         .merge(crate::policy_api::routes())
         .merge(crate::repos_api::routes())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
@@ -90,6 +93,24 @@ async fn poll_now(State(state): State<AppState>) -> Json<PollSummary> {
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<Job>>, ApiError> {
     Ok(Json(state.jobs.list().await.map_err(ApiError::internal)?))
+}
+
+#[derive(Deserialize)]
+struct ReviewsQuery {
+    job_id: Option<i64>,
+}
+
+async fn list_reviews(
+    State(state): State<AppState>,
+    Query(q): Query<ReviewsQuery>,
+) -> Result<Json<Vec<Review>>, ApiError> {
+    Ok(Json(
+        state
+            .reviews
+            .list(q.job_id)
+            .await
+            .map_err(ApiError::internal)?,
+    ))
 }
 
 async fn auth_state(State(state): State<AppState>) -> Json<AuthState> {

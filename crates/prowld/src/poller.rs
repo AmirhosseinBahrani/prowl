@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 use crate::auth::{Auth, AuthState};
 use crate::events::{self, EventBus};
 use crate::gate::{self, GateContext, GateOutcome, GateReason, PrFacts};
-use crate::github::{GitHub, GitHubError, PrRef};
+use crate::github::{GitHub, GitHubError, PrRef, PullRequest};
+use crate::jobs::Job;
 use crate::jobs::{Jobs, NewJob};
 use crate::repos::Repos;
 
@@ -59,6 +60,14 @@ impl From<anyhow::Error> for ConsiderError {
     fn from(e: anyhow::Error) -> Self {
         Self::Internal(e)
     }
+}
+
+pub(crate) enum Recheck {
+    Proceed {
+        pr: Box<PullRequest>,
+        reviewer: String,
+    },
+    Cancel(String),
 }
 
 #[derive(Clone)]
@@ -307,6 +316,79 @@ impl Poller {
                 Ok(false)
             }
         }
+    }
+
+    /// Re-runs the Gate for a queued job right before its review, since the request may have
+    /// been withdrawn, the PR closed or a newer commit pushed while it waited.
+    pub(crate) async fn recheck(&self, token: &str, job: &Job) -> Result<Recheck, GitHubError> {
+        let AuthState::Connected { login, .. } = self.inner.auth.state().await else {
+            return Ok(Recheck::Cancel("not_connected".into()));
+        };
+        let settings = self.inner.settings;
+        let my_teams: Vec<(String, String)> = if settings.include_team_requests {
+            self.inner
+                .github
+                .my_teams(token)
+                .await?
+                .into_iter()
+                .map(|t| (t.organization.login, t.slug))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let repo_watched = self
+            .inner
+            .repos
+            .watched()
+            .await
+            .map(|repos| {
+                repos
+                    .iter()
+                    .any(|r| r.full_name.eq_ignore_ascii_case(&job.repo))
+            })
+            .unwrap_or(false);
+        let pr = self
+            .inner
+            .github
+            .pull_request(token, &job.repo, job.pr_number)
+            .await?;
+        if pr.head.sha != job.head_sha {
+            return Ok(Recheck::Cancel("superseded_by_newer_commit".into()));
+        }
+        let users: Vec<&str> = pr
+            .requested_reviewers
+            .iter()
+            .map(|u| u.login.as_str())
+            .collect();
+        let teams: Vec<&str> = pr.requested_teams.iter().map(|t| t.slug.as_str()).collect();
+        let facts = PrFacts {
+            repo: &job.repo,
+            open: pr.state == "open",
+            draft: pr.draft,
+            author: &pr.user.login,
+            requested_users: &users,
+            requested_teams: &teams,
+        };
+        let ctx = GateContext {
+            me: &login,
+            my_teams: &my_teams,
+            include_team_requests: settings.include_team_requests,
+            skip_drafts: settings.skip_drafts,
+            repo_watched,
+            already_queued: false,
+        };
+        Ok(match gate::evaluate(&facts, &ctx) {
+            GateOutcome::Enqueue => Recheck::Proceed {
+                pr: Box::new(pr),
+                reviewer: login,
+            },
+            GateOutcome::Skip(reason) => Recheck::Cancel(
+                serde_json::to_value(reason)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| format!("{reason:?}")),
+            ),
+        })
     }
 
     async fn report_gated(&self, repo: &str, number: u64, sha: &str, reason: GateReason) {

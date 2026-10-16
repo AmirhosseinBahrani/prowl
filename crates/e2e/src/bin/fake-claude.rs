@@ -15,10 +15,29 @@ fn main() {
     // stdin may be closed or a terminal; either way, an empty prompt is fine.
     let _ = std::io::stdin().read_to_string(&mut stdin);
 
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let mut files: Vec<String> = std::fs::read_dir(&cwd)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    let git_head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&cwd)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
     let invocation = ClaudeInvocation {
         args: std::env::args().skip(1).collect(),
         stdin,
-        cwd: std::env::current_dir().unwrap_or_default(),
+        cwd,
+        files,
+        git_head,
     };
     let n = record(&dir, &invocation);
 

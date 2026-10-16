@@ -44,6 +44,22 @@ type JobRow = (
     i64,
 );
 
+fn from_row(r: JobRow) -> Job {
+    Job {
+        id: r.0,
+        repo: r.1,
+        pr_number: r.2 as u64,
+        head_sha: r.3,
+        title: r.4,
+        author: r.5,
+        html_url: r.6,
+        status: r.7,
+        attempts: r.8,
+        error: r.9,
+        created_at_ms: r.10,
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Jobs {
     db: SqlitePool,
@@ -94,6 +110,70 @@ impl Jobs {
         Ok(found.is_some())
     }
 
+    /// Atomically takes the oldest runnable job and marks it running.
+    pub(crate) async fn claim_next(&self) -> anyhow::Result<Option<Job>> {
+        let now = events::now_ms();
+        let row: Option<JobRow> = sqlx::query_as(
+            "UPDATE jobs SET status = 'running', attempts = attempts + 1, updated_at_ms = ?
+             WHERE id = (SELECT id FROM jobs WHERE status IN ('queued', 'interrupted')
+                         AND next_run_at_ms <= ? ORDER BY id LIMIT 1)
+             RETURNING id, repo, pr_number, head_sha, title, author, html_url, status, attempts,
+                       error, created_at_ms",
+        )
+        .bind(now)
+        .bind(now)
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(row.map(from_row))
+    }
+
+    pub(crate) async fn finish(
+        &self,
+        id: i64,
+        status: &str,
+        error: Option<&str>,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE jobs SET status = ?, error = ?, updated_at_ms = ? WHERE id = ?")
+            .bind(status)
+            .bind(error)
+            .bind(events::now_ms())
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    /// Puts a running job back in the queue to try again after `delay`.
+    pub(crate) async fn defer(
+        &self,
+        id: i64,
+        delay: std::time::Duration,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE jobs SET status = 'queued', error = ?, next_run_at_ms = ?, updated_at_ms = ?
+             WHERE id = ?",
+        )
+        .bind(reason)
+        .bind(events::now_ms() + delay.as_millis() as i64)
+        .bind(events::now_ms())
+        .bind(id)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    /// Jobs left running by a crash or shutdown become runnable again.
+    pub(crate) async fn mark_interrupted(&self) -> anyhow::Result<u64> {
+        Ok(sqlx::query(
+            "UPDATE jobs SET status = 'interrupted', updated_at_ms = ? WHERE status = 'running'",
+        )
+        .bind(events::now_ms())
+        .execute(&self.db)
+        .await?
+        .rows_affected())
+    }
+
     pub(crate) async fn list(&self) -> anyhow::Result<Vec<Job>> {
         let rows: Vec<JobRow> = sqlx::query_as(
             "SELECT id, repo, pr_number, head_sha, title, author, html_url, status, attempts,
@@ -102,21 +182,6 @@ impl Jobs {
         )
         .fetch_all(&self.db)
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| Job {
-                id: r.0,
-                repo: r.1,
-                pr_number: r.2 as u64,
-                head_sha: r.3,
-                title: r.4,
-                author: r.5,
-                html_url: r.6,
-                status: r.7,
-                attempts: r.8,
-                error: r.9,
-                created_at_ms: r.10,
-            })
-            .collect())
+        Ok(rows.into_iter().map(from_row).collect())
     }
 }
