@@ -10,16 +10,13 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::{Auth, AuthState};
-use crate::events::{self, EventBus};
+use crate::events::EventBus;
 use crate::gate::{self, GateContext, GateOutcome, GateReason, PrFacts};
 use crate::github::{GitHub, GitHubError, PrRef, PullRequest};
 use crate::jobs::Job;
 use crate::jobs::{Jobs, NewJob};
 use crate::queue::Queue;
 use crate::repos::Repos;
-
-/// Below this many remaining API calls, polling pauses until the limit resets.
-const MIN_RATE_REMAINING: u64 = 50;
 
 pub mod kind {
     pub const COMPLETED: &str = "poll.completed";
@@ -419,13 +416,10 @@ impl Poller {
 
     async fn rate_limited(&self) -> anyhow::Result<bool> {
         let limit = self.inner.github.rate_limit();
-        let now_secs = (events::now_ms() / 1000) as u64;
-        let (Some(remaining), Some(reset_at)) = (limit.remaining, limit.reset_at) else {
+        let Some(reset_at) = self.inner.github.paused_until() else {
             return Ok(false);
         };
-        if remaining >= MIN_RATE_REMAINING || reset_at <= now_secs {
-            return Ok(false);
-        }
+        let remaining = limit.remaining.unwrap_or(0);
         let mut reported = self.inner.rate_limit_reported.lock().await;
         if *reported != Some(reset_at) {
             *reported = Some(reset_at);

@@ -190,6 +190,18 @@ impl Worker {
                 .await?;
             return Ok(());
         };
+        if let Some(reset_at) = inner.github.paused_until() {
+            let wait = (reset_at as i64 * 1000 - crate::events::now_ms()).max(0) as u64;
+            inner
+                .jobs
+                .defer_without_attempt(
+                    job.id,
+                    Duration::from_millis(wait),
+                    "GitHub rate limit nearly used up",
+                )
+                .await?;
+            return Ok(());
+        }
         let (pr, reviewer) = match inner.poller.recheck(&token, job).await {
             Ok(Recheck::Proceed { pr, reviewer }) => (pr, reviewer),
             Ok(Recheck::Cancel(reason)) => {

@@ -291,6 +291,8 @@ async fn polling_pauses_when_the_rate_limit_runs_low() {
     h.client().poll_now().await.unwrap();
     let before = h.github.requests().len();
 
+    // Give the worker time to pick up the queued job: it must wait too.
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     let summary = h.client().poll_now().await.unwrap();
 
     assert_eq!(summary.skipped.as_deref(), Some("rate_limited"));
@@ -298,6 +300,12 @@ async fn polling_pauses_when_the_rate_limit_runs_low() {
         h.github.requests().len(),
         before,
         "no requests while rate limited"
+    );
+    let job = &h.client().jobs().await.unwrap()[0];
+    assert_eq!(job.status, "queued");
+    assert_eq!(
+        job.error.as_deref(),
+        Some("GitHub rate limit nearly used up")
     );
     let limited = events_of(&h, "poll.rate_limited").await;
     assert_eq!(limited.len(), 1);
