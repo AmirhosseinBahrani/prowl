@@ -20,6 +20,14 @@ struct Tui {
 
 impl Tui {
     fn start(client: ApiClient, home: std::path::PathBuf) -> Self {
+        Self::start_with_editor(client, home, Arc::new(|_| {}))
+    }
+
+    fn start_with_editor(
+        client: ApiClient,
+        home: std::path::PathBuf,
+        editor: Arc<dyn Fn(&std::path::Path) + Send + Sync>,
+    ) -> Self {
         let (keys, rx) = mpsc::unbounded_channel();
         let screen = Arc::new(Mutex::new(String::new()));
         let snapshot = screen.clone();
@@ -33,7 +41,7 @@ impl Tui {
                     home,
                     tick: Duration::from_millis(100),
                     snapshot: Some(snapshot),
-                    editor: prowl::Editor::Hook(std::sync::Arc::new(|_| {})),
+                    editor: prowl::Editor::Hook(editor),
                     input_paused: None,
                 },
             )
@@ -44,6 +52,28 @@ impl Tui {
 
     fn of(h: &Harness) -> Self {
         Self::start(h.client(), h.daemon().home().to_path_buf())
+    }
+
+    /// With an "editor" that records which file it opened and appends `addition` to it.
+    fn with_editor(
+        h: &Harness,
+        addition: &'static str,
+    ) -> (Self, Arc<Mutex<Vec<std::path::PathBuf>>>) {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let log = opened.clone();
+        let editor = Arc::new(move |path: &std::path::Path| {
+            log.lock().unwrap().push(path.to_path_buf());
+            let mut text = std::fs::read_to_string(path).unwrap();
+            text = text.replace(
+                "## ALWAYS require human review\n",
+                &format!("## ALWAYS require human review\n{addition}"),
+            );
+            std::fs::write(path, text).unwrap();
+        });
+        (
+            Self::start_with_editor(h.client(), h.daemon().home().to_path_buf(), editor),
+            opened,
+        )
     }
 
     fn screen(&self) -> String {
@@ -148,7 +178,7 @@ async fn first_run_connects_github_and_picks_repositories() {
         StatusCode::OK,
         json!({ "login": "octo", "name": null }),
     );
-    let tui = Tui::of(&h);
+    let (tui, opened) = Tui::with_editor(&h, "- [CRYPTO] Cryptography\n");
 
     tui.wait_for("Connect your GitHub account").await;
     tui.press(KeyCode::Enter);
@@ -184,6 +214,16 @@ async fn first_run_connects_github_and_picks_repositories() {
 
     tui.press(KeyCode::Enter);
     tui.wait_for("Your Review Policy").await;
+    tui.press(KeyCode::Char('e'));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while opened.lock().unwrap().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "editor never opened"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(opened.lock().unwrap()[0].ends_with("global.md"));
     tui.press(KeyCode::Enter);
     tui.wait_for("1 Queue").await;
     tui.wait_for("@octo").await;
@@ -224,6 +264,162 @@ async fn missing_tools_are_explained_before_anything_else() {
     tui.wait_for("claude auth login").await;
     tui.press(KeyCode::Enter);
     tui.wait_for("Connect your GitHub account").await;
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+/// Connected, watching acme/api, on the main screen's Policy tab.
+async fn on_policy_tab(
+    addition: &'static str,
+) -> (Harness, Tui, Arc<Mutex<Vec<std::path::PathBuf>>>) {
+    let h = Harness::start().await.unwrap();
+    h.connect_github("octo").await.unwrap();
+    repos(&h);
+    h.client().repos(&RepoQuery::default()).await.unwrap();
+    h.client().watch("acme/api").await.unwrap();
+    let (tui, opened) = Tui::with_editor(&h, addition);
+    tui.wait_for("1 Queue").await;
+    tui.press(KeyCode::Char('4'));
+    tui.wait_for("global · version").await;
+    (h, tui, opened)
+}
+
+#[tokio::test]
+async fn the_policy_tab_edits_in_the_editor_and_shows_the_new_version() {
+    let (h, tui, opened) = on_policy_tab("- [CRYPTO] Cryptography\n").await;
+    assert!(tui.screen().contains("6 rules"));
+    assert!(tui.screen().contains("[AUTH]"));
+
+    tui.press(KeyCode::Char('e'));
+
+    tui.wait_for("[CRYPTO] Cryptography").await;
+    tui.wait_for("7 rules").await;
+    assert!(opened.lock().unwrap()[0].ends_with("global.md"));
+    let latest = &h
+        .client()
+        .policy_versions(&prowld::policy::Scope::Global)
+        .await
+        .unwrap()[0];
+    assert_eq!(latest.source, "file");
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn history_shows_the_diff_and_restores_a_version() {
+    let (h, tui, _) = on_policy_tab("- [CRYPTO] Cryptography\n").await;
+    tui.press(KeyCode::Char('e'));
+    tui.wait_for("7 rules").await;
+
+    tui.press(KeyCode::Char('h'));
+    tui.wait_for("versions (newest first)").await;
+    tui.wait_for("default").await;
+    tui.press(KeyCode::Down);
+    tui.wait_for("+ - [CRYPTO] Cryptography").await;
+    tui.press(KeyCode::Char('r'));
+    tui.wait_for("Restore version").await;
+    tui.press(KeyCode::Char('y'));
+    tui.wait_for("Restored v").await;
+    tui.press(KeyCode::Esc);
+    tui.wait_for("6 rules").await;
+    // The list and the reloaded content arrive separately; wait for the content too.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tui.screen().contains("[CRYPTO]") {
+        assert!(tokio::time::Instant::now() < deadline, "{}", tui.screen());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn overrides_are_created_in_the_editor_and_deleted_after_confirming() {
+    let (h, tui, opened) = on_policy_tab("- [API] Public API changes\n").await;
+
+    tui.press(KeyCode::Char('n'));
+    tui.wait_for("override for repository").await;
+    tui.type_text("acme/api");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Created an override for acme/api").await;
+    tui.wait_for("acme/api  7 rules").await;
+    assert!(
+        opened
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .ends_with("acme/api.md")
+    );
+    let effective = h.client().effective_policy(Some("acme/api")).await.unwrap();
+    assert!(effective.content.contains("[API] Public API changes"));
+
+    tui.press(KeyCode::Down);
+    tui.press(KeyCode::Char('x'));
+    tui.wait_for("Delete the override for acme/api?").await;
+    tui.press(KeyCode::Char('y'));
+    tui.wait_for("Deleted the override for acme/api").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tui.screen().contains("acme/api  7 rules") {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        h.client()
+            .effective_policy(Some("acme/api"))
+            .await
+            .unwrap()
+            .scope,
+        "global"
+    );
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_dry_run_shows_what_would_happen_without_posting() {
+    let (h, tui, _) = on_policy_tab("").await;
+    let commits = h
+        .git
+        .create_pr(
+            "acme/api",
+            7,
+            &[("README.md", "# api\n")],
+            &[("src/auth.rs", "fn auth() {}\n")],
+        )
+        .unwrap();
+    h.github.route(
+        Method::GET,
+        "/repos/acme/api/pulls/7",
+        StatusCode::OK,
+        json!({
+            "number": 7, "state": "open", "draft": false, "title": "Auth change",
+            "html_url": "https://github.com/acme/api/pull/7", "user": { "login": "alice" },
+            "body": "", "head": { "sha": commits.head_sha, "ref": "f" },
+            "base": { "sha": commits.base_sha, "ref": "main" },
+            "additions": 1, "deletions": 0, "changed_files": 1, "labels": [],
+            "requested_reviewers": [], "requested_teams": []
+        }),
+    );
+    h.claude
+        .respond_with(vec![prowl_e2e::ClaudeResponse::review(&json!({
+            "summary": "Changes auth.", "quick_notes": ["Touches login"], "risk_score": 70,
+            "severity": "high", "touches_critical_sections": true,
+            "matched_policy_rules": [{ "id": "AUTH", "evidence": "src/auth.rs:1" }],
+            "findings": [], "recommendation": "request_changes"
+        }))])
+        .unwrap();
+    let writes = h.github.writes().len();
+
+    tui.press(KeyCode::Char('t'));
+    tui.type_text("acme/api#7");
+    tui.press(KeyCode::Enter);
+
+    tui.wait_for("this PR would wait for a human review").await;
+    assert!(tui.screen().contains("matched [AUTH] src/auth.rs:1"));
+    assert!(tui.screen().contains("Summary: Changes auth."));
+    assert_eq!(h.github.writes().len(), writes, "a dry run posts nothing");
+    tui.press(KeyCode::Esc);
+    tui.wait_for("global · version").await;
     tui.quit().await;
     h.shutdown().await.unwrap();
 }
