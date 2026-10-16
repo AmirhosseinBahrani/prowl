@@ -9,11 +9,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::Auth;
 use crate::claude::{Claude, ClaudeError};
+use crate::decider::{self, Decision, DecisionSettings};
 use crate::events::EventBus;
+use crate::github::GitHub;
 use crate::jobs::{Job, Jobs};
 use crate::policy::{PolicyStore, Scope};
 use crate::poller::{Poller, Recheck};
 use crate::prompt::{self, PrContext};
+use crate::publish::{self, Target};
 use crate::review::{self, ReviewOutput};
 use crate::reviews::{NewReview, Reviews};
 use crate::workspace::Workspace;
@@ -29,6 +32,8 @@ pub mod kind {
     pub const FAILED: &str = "review.failed";
     pub const CANCELLED: &str = "job.cancelled";
     pub const CLAUDE_MISSING: &str = "claude.missing";
+    pub const DECIDED: &str = "review.decided";
+    pub const PUBLISHED: &str = "review.published";
 }
 
 #[derive(Clone)]
@@ -45,6 +50,8 @@ struct Inner {
     workspace: Workspace,
     claude: Claude,
     events: EventBus,
+    github: GitHub,
+    decision: DecisionSettings,
     slots: Arc<Semaphore>,
 }
 
@@ -57,6 +64,8 @@ pub(crate) struct WorkerParts {
     pub workspace: Workspace,
     pub claude: Claude,
     pub events: EventBus,
+    pub github: GitHub,
+    pub decision: DecisionSettings,
     pub concurrency: usize,
 }
 
@@ -73,6 +82,8 @@ impl Worker {
                 workspace: parts.workspace,
                 claude: parts.claude,
                 events: parts.events,
+                github: parts.github,
+                decision: parts.decision,
             }),
         }
     }
@@ -193,6 +204,7 @@ impl Worker {
                 &job.repo,
                 job.pr_number,
                 &pr.base.ref_name,
+                &pr.base.sha,
                 &job.head_sha,
                 &token,
             )
@@ -220,7 +232,6 @@ impl Worker {
                 duration_ms: started.elapsed().as_millis() as i64,
             })
             .await?;
-        inner.jobs.finish(job.id, "done", None).await?;
         let details = match &output {
             Ok(o) => serde_json::json!({
                 "review_id": review_id, "valid": true, "severity": o.severity,
@@ -233,6 +244,51 @@ impl Worker {
             }),
         };
         self.emit(kind::FINISHED, job, details).await;
+
+        let rule_ids: Vec<String> = policy.rules.iter().map(|r| r.id.clone()).collect();
+        let verdict = decider::decide(
+            output.as_ref().map_err(String::as_str),
+            &rule_ids,
+            inner.decision,
+        );
+        inner
+            .reviews
+            .set_decision(review_id, verdict.decision, &verdict.reasons)
+            .await?;
+        self.emit(
+            kind::DECIDED,
+            job,
+            serde_json::json!({
+                "review_id": review_id,
+                "decision": verdict.decision,
+                "reasons": verdict.reasons,
+                "summary": publish::describe(verdict.decision, &verdict.reasons),
+            }),
+        )
+        .await;
+
+        if let (Decision::AgentOnly, Ok(output)) = (verdict.decision, &output) {
+            let target = Target {
+                repo: &job.repo,
+                number: job.pr_number,
+                head_sha: &job.head_sha,
+                reviewer: &reviewer,
+                policy_scope: &policy.scope,
+                policy_version_id: policy.version_id,
+            };
+            let submitted = publish::agent_only(&inner.github, &token, &target, output).await?;
+            inner
+                .reviews
+                .set_published(review_id, submitted.id, &submitted.html_url)
+                .await?;
+            self.emit(
+                kind::PUBLISHED,
+                job,
+                serde_json::json!({ "review_id": review_id, "url": submitted.html_url }),
+            )
+            .await;
+        }
+        inner.jobs.finish(job.id, "done", None).await?;
         Ok(())
     }
 

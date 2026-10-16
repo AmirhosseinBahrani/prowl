@@ -1,5 +1,8 @@
 //! Git checkouts for reviews: one cached bare clone per repository, and a throwaway worktree
 //! per job at the PR's head commit. Reviews never touch the user's own working copies.
+//!
+//! Claude gets no shell, so the diff and commit list are computed here and written into the
+//! checkout under [`REVIEW_DIR`], where its read-only file tools can reach them.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -8,6 +11,9 @@ use std::sync::Arc;
 use anyhow::{Context, bail};
 use tokio::process::Command;
 use tokio::sync::Mutex;
+
+/// Directory inside the checkout holding PRowl's precomputed review material.
+pub(crate) const REVIEW_DIR: &str = ".prowl-review";
 
 #[derive(Clone)]
 pub(crate) struct Workspace {
@@ -30,13 +36,16 @@ impl Workspace {
         }
     }
 
-    /// Fetches the PR and its base branch, then checks out `head_sha` in a fresh worktree.
+    /// Fetches the PR and its base branch, checks out `head_sha` in a fresh worktree, and
+    /// writes the diff against `base_sha` (merge-base form) and the commit list into it.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn checkout(
         &self,
         job_id: i64,
         repo: &str,
         pr_number: u64,
         base_ref: &str,
+        base_sha: &str,
         head_sha: &str,
         token: &str,
     ) -> anyhow::Result<PathBuf> {
@@ -66,6 +75,7 @@ impl Workspace {
             .run()
             .await
             .with_context(|| format!("checking out {head_sha}"))?;
+        write_review_material(&worktree, base_sha).await?;
         Ok(worktree)
     }
 
@@ -149,6 +159,39 @@ impl Workspace {
             .or_default()
             .clone()
     }
+}
+
+async fn write_review_material(worktree: &Path, base_sha: &str) -> anyhow::Result<()> {
+    let range = format!("{base_sha}...HEAD");
+    // No external diff drivers or text conversion: only git's own output.
+    let diff = git(worktree, &[])
+        .args([
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+        ])
+        .arg(&range)
+        .run()
+        .await
+        .context("computing the PR diff")?;
+    let commits = git(worktree, &[])
+        .args([
+            "log",
+            "--no-color",
+            "--format=%h %an: %s%n%n%b",
+            "--no-merges",
+        ])
+        .arg(format!("{base_sha}..HEAD"))
+        .run()
+        .await
+        .context("listing the PR's commits")?;
+    let dir = worktree.join(REVIEW_DIR);
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("pr.diff"), diff)?;
+    std::fs::write(dir.join("commits.txt"), commits)?;
+    Ok(())
 }
 
 /// HTTPS credentials passed through git's environment, so the token never lands in a config

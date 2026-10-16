@@ -7,7 +7,7 @@ use std::time::Duration;
 use bytes::Bytes;
 
 use reqwest::{StatusCode, header};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const USER_AGENT: &str = concat!("prowl/", env!("CARGO_PKG_VERSION"));
 pub(crate) const SCOPES: &str = "repo read:org";
@@ -140,6 +140,37 @@ pub(crate) struct Label {
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TeamRef {
     pub slug: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct PrFile {
+    pub filename: String,
+    /// Absent for binary files and very large diffs.
+    #[serde(default)]
+    pub patch: Option<String>,
+}
+
+/// A review to submit. `event` is always `COMMENT`: PRowl never approves on its own.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct NewReview<'a> {
+    pub commit_id: &'a str,
+    pub body: &'a str,
+    pub event: &'static str,
+    pub comments: Vec<InlineComment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct InlineComment {
+    pub path: String,
+    pub line: u32,
+    pub side: &'static str,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Submitted {
+    pub id: i64,
+    pub html_url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -337,6 +368,115 @@ impl GitHub {
             }
         }
         Ok(teams)
+    }
+
+    pub(crate) async fn pull_files(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<PrFile>, GitHubError> {
+        let mut files = Vec::new();
+        for page in 1..=30 {
+            let page = page.to_string();
+            let batch: Vec<PrFile> = self
+                .get_json(
+                    token,
+                    &format!("/repos/{repo}/pulls/{number}/files"),
+                    &[("per_page", &PER_PAGE.to_string()), ("page", &page)],
+                )
+                .await?;
+            let last = batch.len() < PER_PAGE;
+            files.extend(batch);
+            if last {
+                break;
+            }
+        }
+        Ok(files)
+    }
+
+    pub(crate) async fn create_review(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        review: &NewReview<'_>,
+    ) -> Result<Submitted, GitHubError> {
+        debug_assert_eq!(review.event, "COMMENT");
+        self.send_json(
+            token,
+            reqwest::Method::POST,
+            &format!("/repos/{repo}/pulls/{number}/reviews"),
+            review,
+        )
+        .await
+    }
+
+    /// Creates the label if the repository doesn't have it yet.
+    pub(crate) async fn ensure_label(
+        &self,
+        token: &str,
+        repo: &str,
+        name: &str,
+        color: &str,
+        description: &str,
+    ) -> Result<(), GitHubError> {
+        let body = serde_json::json!({ "name": name, "color": color, "description": description });
+        match self
+            .send_json::<serde_json::Value>(
+                token,
+                reqwest::Method::POST,
+                &format!("/repos/{repo}/labels"),
+                &body,
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            // 422: it already exists.
+            Err(GitHubError::Status { status, .. })
+                if status == StatusCode::UNPROCESSABLE_ENTITY =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub(crate) async fn add_labels(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        labels: &[&str],
+    ) -> Result<(), GitHubError> {
+        self.send_json::<serde_json::Value>(
+            token,
+            reqwest::Method::POST,
+            &format!("/repos/{repo}/issues/{number}/labels"),
+            &serde_json::json!({ "labels": labels }),
+        )
+        .await
+        .map(drop)
+    }
+
+    async fn send_json<T: serde::de::DeserializeOwned>(
+        &self,
+        token: &str,
+        method: reqwest::Method,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<T, GitHubError> {
+        let response = self
+            .http
+            .request(method, format!("{}{path}", self.api_url))
+            .header(header::ACCEPT, "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .await?;
+        self.record_rate_limit(&response);
+        Ok(self.check(response).await?.json().await?)
     }
 
     pub(crate) fn rate_limit(&self) -> RateLimit {

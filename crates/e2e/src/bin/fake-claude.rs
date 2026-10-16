@@ -32,12 +32,16 @@ fn main() {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+    let review_diff = std::fs::read_to_string(cwd.join(".prowl-review/pr.diff")).ok();
+    let review_commits = std::fs::read_to_string(cwd.join(".prowl-review/commits.txt")).ok();
     let invocation = ClaudeInvocation {
         args: std::env::args().skip(1).collect(),
         stdin,
         cwd,
         files,
         git_head,
+        review_diff,
+        review_commits,
     };
     let n = record(&dir, &invocation);
 

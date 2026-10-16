@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use crate::decider::{Decision, Reason};
 use crate::events;
 use crate::review::ReviewOutput;
 
@@ -19,6 +20,11 @@ pub struct Review {
     pub cost_usd: Option<f64>,
     pub duration_ms: i64,
     pub created_at_ms: i64,
+    /// `None` until decided.
+    pub decision: Option<Decision>,
+    #[serde(default)]
+    pub decision_reasons: Vec<Reason>,
+    pub published_url: Option<String>,
 }
 
 pub(crate) struct NewReview<'a> {
@@ -43,6 +49,9 @@ type ReviewRow = (
     Option<f64>,
     i64,
     i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
 );
 
 #[derive(Clone)]
@@ -80,10 +89,45 @@ impl Reviews {
         .last_insert_rowid())
     }
 
+    pub(crate) async fn set_decision(
+        &self,
+        id: i64,
+        decision: Decision,
+        reasons: &[Reason],
+    ) -> anyhow::Result<()> {
+        let decision = serde_json::to_value(decision)?;
+        sqlx::query("UPDATE reviews SET decision = ?, decision_reasons = ? WHERE id = ?")
+            .bind(decision.as_str())
+            .bind(serde_json::to_string(reasons)?)
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        Ok(())
+    }
+
+    pub(crate) async fn set_published(
+        &self,
+        id: i64,
+        github_review_id: i64,
+        url: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE reviews SET github_review_id = ?, published_url = ?, published_at_ms = ? WHERE id = ?",
+        )
+        .bind(github_review_id)
+        .bind(url)
+        .bind(events::now_ms())
+        .bind(id)
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
     pub(crate) async fn list(&self, job_id: Option<i64>) -> anyhow::Result<Vec<Review>> {
         let rows: Vec<ReviewRow> = sqlx::query_as(
             "SELECT id, job_id, policy_scope, policy_version_id, valid, output, raw_answer,
-                    invalid_reason, cost_usd, duration_ms, created_at_ms
+                    invalid_reason, cost_usd, duration_ms, created_at_ms, decision,
+                    decision_reasons, published_url
              FROM reviews WHERE (? IS NULL OR job_id = ?) ORDER BY id DESC LIMIT 500",
         )
         .bind(job_id)
@@ -104,6 +148,18 @@ impl Reviews {
                     cost_usd: r.8,
                     duration_ms: r.9,
                     created_at_ms: r.10,
+                    decision: r
+                        .11
+                        .as_deref()
+                        .map(|d| serde_json::from_value(d.into()))
+                        .transpose()?,
+                    decision_reasons: r
+                        .12
+                        .as_deref()
+                        .map(serde_json::from_str)
+                        .transpose()?
+                        .unwrap_or_default(),
+                    published_url: r.13,
                 })
             })
             .collect()

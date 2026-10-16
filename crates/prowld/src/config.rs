@@ -42,6 +42,8 @@ pub struct Config {
     pub review_timeout: Duration,
     /// Spend cap per Claude run, passed to `claude --max-budget-usd`.
     pub review_budget_usd: Option<f64>,
+    /// A review whose risk score reaches this needs a human.
+    pub risk_threshold: u8,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -68,6 +70,7 @@ impl Config {
             review_concurrency: 2,
             review_timeout: Duration::from_secs(15 * 60),
             review_budget_usd: None,
+            risk_threshold: 60,
             claude_bin: None,
             claude_env: Vec::new(),
         }

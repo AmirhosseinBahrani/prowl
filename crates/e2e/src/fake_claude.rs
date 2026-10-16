@@ -30,6 +30,11 @@ pub struct ClaudeInvocation {
     /// `git rev-parse HEAD` in `cwd`, if it is a git checkout.
     #[serde(default)]
     pub git_head: Option<String>,
+    /// Contents of `.prowl-review/pr.diff` and `commits.txt` in `cwd`, if present.
+    #[serde(default)]
+    pub review_diff: Option<String>,
+    #[serde(default)]
+    pub review_commits: Option<String>,
 }
 
 impl ClaudeInvocation {
