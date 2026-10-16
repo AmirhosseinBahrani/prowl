@@ -57,6 +57,7 @@ pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/status", get(status))
         .route("/v1/events", get(events))
+        .route("/v1/events/recent", get(recent_events))
         .route("/v1/auth", get(auth_state).delete(disconnect))
         .route("/v1/auth/device", post(start_device_flow))
         .route("/v1/poll", post(poll_now))
@@ -221,6 +222,30 @@ struct EventsQuery {
     /// Skip stored events and stream only new ones.
     #[serde(default)]
     live: bool,
+}
+
+#[derive(Deserialize)]
+struct RecentQuery {
+    #[serde(default = "default_recent")]
+    limit: i64,
+}
+
+fn default_recent() -> i64 {
+    200
+}
+
+async fn recent_events(
+    State(state): State<AppState>,
+    Query(q): Query<RecentQuery>,
+) -> Result<Json<Vec<crate::events::Event>>, ApiError> {
+    let limit = q.limit.clamp(1, 1000);
+    Ok(Json(
+        state
+            .events
+            .recent(limit)
+            .await
+            .map_err(ApiError::internal)?,
+    ))
 }
 
 /// Replays stored events after `since`, then streams new ones live.

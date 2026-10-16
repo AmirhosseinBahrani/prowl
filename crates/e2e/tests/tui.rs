@@ -1,5 +1,7 @@
 //! The real `prowl` TUI on a test terminal, driven by key presses against a real daemon.
 
+mod common;
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,6 +13,9 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use serde_json::json;
 use tokio::sync::mpsc;
+
+/// URLs the TUI asked to open, across tests (each test checks for its own).
+static OPENED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 struct Tui {
     keys: mpsc::UnboundedSender<KeyEvent>,
@@ -42,6 +47,9 @@ impl Tui {
                     tick: Duration::from_millis(100),
                     snapshot: Some(snapshot),
                     editor: prowl::Editor::Hook(editor),
+                    opener: prowl::Opener::Hook(Arc::new(|url: &str| {
+                        OPENED.lock().unwrap().push(url.to_owned())
+                    })),
                     input_paused: None,
                 },
             )
@@ -421,6 +429,92 @@ async fn a_dry_run_shows_what_would_happen_without_posting() {
     assert_eq!(h.github.writes().len(), writes, "a dry run posts nothing");
     tui.press(KeyCode::Esc);
     tui.wait_for("global · version").await;
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+/// A reviewed PR (#7, posted by the agent) and the TUI on the main screen.
+async fn after_a_review() -> (Harness, Tui) {
+    let (h, _) = common::setup(&[7]).await;
+    h.claude
+        .respond_with(vec![prowl_e2e::ClaudeResponse::review(
+            &common::calm_review(),
+        )])
+        .unwrap();
+    let tui = Tui::of(&h);
+    tui.wait_for("1 Queue").await;
+    h.client().poll_now().await.unwrap();
+    common::wait_for_job(&h, common::finished("done")).await;
+    (h, tui)
+}
+
+#[tokio::test]
+async fn the_feed_shows_past_and_live_activity() {
+    let (h, tui) = after_a_review().await;
+
+    tui.press(KeyCode::Char('2'));
+
+    // Earlier events come from the backlog, later ones arrived live.
+    tui.wait_for("connected to GitHub as @octo").await;
+    tui.wait_for("queued for review: Rate limit login #7").await;
+    tui.wait_for("reviewing with Claude").await;
+    tui.wait_for("the agent's review is enough").await;
+    tui.wait_for("posted https://github.com/acme/api/pull/7#pullrequestreview-907")
+        .await;
+    assert!(tui.screen().contains("acme/api#7"));
+    assert!(
+        !tui.screen().contains("checked GitHub"),
+        "polls hidden by default"
+    );
+    // And something new shows up while watching.
+    h.client()
+        .save_policy(
+            &prowld::policy::Scope::Global,
+            "## ALWAYS require human review\n- [X] x\n",
+        )
+        .await
+        .unwrap();
+    tui.wait_for("policy global updated to v").await;
+    tui.press(KeyCode::Char('p'));
+    tui.wait_for("checked GitHub").await;
+
+    tui.press(KeyCode::Char('f'));
+    tui.type_text("watching");
+    tui.press(KeyCode::Enter);
+    tui.wait_for("filter: watching").await;
+    assert!(!tui.screen().contains("reviewing with Claude"));
+    tui.press(KeyCode::Char('c'));
+    tui.press(KeyCode::Char(' '));
+    tui.wait_for("paused").await;
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn history_lists_reviews_with_details_and_opens_them() {
+    let (h, tui) = after_a_review().await;
+
+    tui.press(KeyCode::Char('3'));
+
+    tui.wait_for("acme/api#7").await;
+    tui.wait_for("agent").await;
+    assert!(tui.screen().contains("Rate limit login #7"));
+    assert!(tui.screen().contains("$0.05"));
+    tui.press(KeyCode::Enter);
+    tui.wait_for("Summary: Renames a helper.").await;
+    tui.wait_for("The agent's review was enough.").await;
+    tui.press(KeyCode::Char('o'));
+    let url = "https://github.com/acme/api/pull/7#pullrequestreview-907";
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !OPENED.lock().unwrap().iter().any(|u| u == url) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the review was never opened"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tui.press(KeyCode::Esc);
+    tui.wait_for("severity").await;
     tui.quit().await;
     h.shutdown().await.unwrap();
 }

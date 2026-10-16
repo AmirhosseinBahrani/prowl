@@ -55,6 +55,14 @@ impl EventBus {
         self.tx.subscribe()
     }
 
+    /// The most recent `limit` events, oldest first.
+    pub(crate) async fn recent(&self, limit: i64) -> anyhow::Result<Vec<Event>> {
+        let latest = self.latest_id().await?;
+        let mut events = self.since((latest - limit).max(0)).await?;
+        events.truncate(limit as usize);
+        Ok(events)
+    }
+
     pub(crate) async fn latest_id(&self) -> anyhow::Result<i64> {
         Ok(
             sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM events")

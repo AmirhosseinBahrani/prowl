@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
             tick: Duration::from_secs(5),
             snapshot: None,
             editor: prowl::Editor::System,
+            opener: prowl::Opener::System,
             input_paused: Some(paused_tx),
         },
     )

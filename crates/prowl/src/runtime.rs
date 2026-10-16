@@ -23,6 +23,14 @@ pub enum Editor {
     Hook(Arc<dyn Fn(&std::path::Path) + Send + Sync>),
 }
 
+/// How URLs are opened.
+#[derive(Clone)]
+pub enum Opener {
+    /// The OS default browser.
+    System,
+    Hook(Arc<dyn Fn(&str) + Send + Sync>),
+}
+
 pub struct Options {
     /// The daemon home, for installing the background service.
     pub home: PathBuf,
@@ -31,6 +39,7 @@ pub struct Options {
     /// If set, receives the screen as text after every draw (tests).
     pub snapshot: Option<Arc<Mutex<String>>>,
     pub editor: Editor,
+    pub opener: Opener,
     /// Pauses the key reader while an editor owns the terminal.
     pub input_paused: Option<tokio::sync::watch::Sender<bool>>,
 }
@@ -106,6 +115,7 @@ fn execute(
         return;
     }
     let home = options.home.clone();
+    let opener = options.opener.clone();
     tokio::spawn(async move {
         let err = |e: prowld::client::ClientError| e.to_string();
         let msg = match cmd {
@@ -170,6 +180,11 @@ fn execute(
             Cmd::DryRun { repo, pr } => {
                 Msg::DryRunDone(client.dry_run(&repo, pr).await.map_err(err))
             }
+            Cmd::LoadRecentEvents => {
+                Msg::RecentEvents(client.recent_events(500).await.map_err(err))
+            }
+            Cmd::LoadReviews => Msg::Reviews(client.reviews(None).await.map_err(err)),
+            Cmd::OpenUrl { url } => Msg::Opened(open_url(&opener, &url)),
             Cmd::Subscribe | Cmd::EditPolicy { .. } | Cmd::CreateOverride { .. } => {
                 unreachable!("handled by the run loop")
             }
@@ -234,6 +249,36 @@ async fn install_service(home: PathBuf) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+fn open_url(opener: &Opener, url: &str) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(format!("not opening {url}: not a web address"));
+    }
+    match opener {
+        Opener::Hook(hook) => {
+            hook(url);
+            Ok(())
+        }
+        Opener::System => {
+            let mut cmd = if cfg!(target_os = "macos") {
+                std::process::Command::new("open")
+            } else if cfg!(windows) {
+                let mut c = std::process::Command::new("rundll32");
+                c.arg("url.dll,FileProtocolHandler");
+                c
+            } else {
+                std::process::Command::new("xdg-open")
+            };
+            cmd.arg(url)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map(drop)
+                .map_err(|e| format!("could not open a browser: {e}"))
+        }
+    }
 }
 
 fn parse_scope(scope: &str) -> Result<prowld::policy::Scope, String> {

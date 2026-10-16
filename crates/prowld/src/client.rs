@@ -291,6 +291,12 @@ impl ApiClient {
         self.event_stream(format!("/v1/events?since={since}")).await
     }
 
+    /// The latest `limit` events, oldest first.
+    pub async fn recent_events(&self, limit: usize) -> Result<Vec<Event>, ClientError> {
+        self.get_json(&format!("/v1/events/recent?limit={limit}"))
+            .await
+    }
+
     /// Streams only events emitted from now on.
     pub async fn live_events(
         &self,
