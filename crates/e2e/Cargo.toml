@@ -21,4 +21,7 @@ tempfile.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+crossterm.workspace = true
 futures.workspace = true
+prowl = { path = "../prowl" }
+ratatui.workspace = true

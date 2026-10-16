@@ -55,6 +55,14 @@ impl EventBus {
         self.tx.subscribe()
     }
 
+    pub(crate) async fn latest_id(&self) -> anyhow::Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM events")
+                .fetch_one(&self.db)
+                .await?,
+        )
+    }
+
     pub(crate) async fn since(&self, after_id: i64) -> anyhow::Result<Vec<Event>> {
         let rows: Vec<(i64, String, String, i64)> = sqlx::query_as(
             "SELECT id, kind, payload, at_ms FROM events WHERE id > ? ORDER BY id LIMIT 1000",

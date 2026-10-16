@@ -11,6 +11,21 @@ fn main() {
         .expect("PROWL_FAKE_CLAUDE_DIR must be set")
         .into();
 
+    // Health checks aren't reviews: answer them without recording an invocation.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["--version"] {
+        println!("2.1.283 (Claude Code, fake)");
+        return;
+    }
+    if args.first().map(String::as_str) == Some("auth") {
+        let logged_in = !dir.join("logged-out").exists();
+        println!(
+            "{}",
+            serde_json::json!({ "loggedIn": logged_in, "authMethod": "fake", "email": "private@example.com" })
+        );
+        return;
+    }
+
     let mut stdin = String::new();
     // stdin may be closed or a terminal; either way, an empty prompt is fine.
     let _ = std::io::stdin().read_to_string(&mut stdin);
@@ -32,7 +47,6 @@ fn main() {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let args: Vec<String> = std::env::args().skip(1).collect();
     let extra_dir = args
         .iter()
         .position(|a| a == "--add-dir")
