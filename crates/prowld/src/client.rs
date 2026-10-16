@@ -209,6 +209,11 @@ impl ApiClient {
         self.get_json("/v1/costs").await
     }
 
+    /// Whether the claude CLI and git are usable by the daemon.
+    pub async fn doctor(&self) -> Result<crate::doctor::Doctor, ClientError> {
+        self.get_json("/v1/doctor").await
+    }
+
     pub async fn power(&self) -> Result<PowerStatus, ClientError> {
         self.get_json("/v1/power").await
     }
@@ -271,7 +276,20 @@ impl ApiClient {
         &self,
         since: i64,
     ) -> Result<impl Stream<Item = Result<Event, ClientError>> + Send + 'static, ClientError> {
-        let path = format!("/v1/events?since={since}");
+        self.event_stream(format!("/v1/events?since={since}")).await
+    }
+
+    /// Streams only events emitted from now on.
+    pub async fn live_events(
+        &self,
+    ) -> Result<impl Stream<Item = Result<Event, ClientError>> + Send + 'static, ClientError> {
+        self.event_stream("/v1/events?live=true".to_owned()).await
+    }
+
+    async fn event_stream(
+        &self,
+        path: String,
+    ) -> Result<impl Stream<Item = Result<Event, ClientError>> + Send + 'static, ClientError> {
         let response = self
             .send(Method::GET, &path, Some(&self.token), None)
             .await?;

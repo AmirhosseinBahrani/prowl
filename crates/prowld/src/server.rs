@@ -32,6 +32,8 @@ pub(crate) struct AppState {
     pub reviews: Reviews,
     pub daily_budget_usd: Option<f64>,
     pub power: Power,
+    pub claude: std::sync::Arc<crate::claude::Claude>,
+    pub claude_env: Vec<(String, String)>,
     pub queue: Queue,
     pub poller: Poller,
     pub token: String,
@@ -41,7 +43,7 @@ pub(crate) struct AppState {
     pub shutdown: CancellationToken,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct Status {
     pub version: String,
     pub pid: u32,
@@ -61,6 +63,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/reviews", get(list_reviews))
         .route("/v1/power", get(power_status))
         .route("/v1/costs", get(costs))
+        .route("/v1/doctor", get(doctor))
         .merge(crate::policy_api::routes())
         .merge(crate::repos_api::routes())
         .merge(crate::queue_api::routes())
@@ -121,7 +124,7 @@ async fn list_reviews(
     ))
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct Costs {
     /// Claude spend since midnight UTC.
     pub today_usd: f64,
@@ -144,6 +147,10 @@ async fn costs(State(state): State<AppState>) -> Result<Json<Costs>, ApiError> {
         daily_budget_usd: state.daily_budget_usd,
         resets_at_ms: day + 86_400_000,
     }))
+}
+
+async fn doctor(State(state): State<AppState>) -> Json<crate::doctor::Doctor> {
+    Json(crate::doctor::check(&state.claude, &state.claude_env).await)
 }
 
 async fn power_status(State(state): State<AppState>) -> Json<PowerStatus> {
@@ -190,6 +197,9 @@ impl IntoResponse for ApiError {
 struct EventsQuery {
     #[serde(default)]
     since: i64,
+    /// Skip stored events and stream only new ones.
+    #[serde(default)]
+    live: bool,
 }
 
 /// Replays stored events after `since`, then streams new ones live.
@@ -199,15 +209,25 @@ async fn events(
 ) -> Result<Sse<impl Stream<Item = Result<sse::Event, Infallible>>>, StatusCode> {
     // Subscribe before reading history so nothing emitted in between is lost.
     let mut live = state.events.subscribe();
-    let backlog = state
-        .events
-        .since(q.since)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let (since, backlog) = if q.live {
+        let latest = state
+            .events
+            .latest_id()
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        (latest, Vec::new())
+    } else {
+        let backlog = state
+            .events
+            .since(q.since)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        (q.since, backlog)
+    };
     let bus = state.events.clone();
 
     let stream = async_stream::stream! {
-        let mut last = q.since;
+        let mut last = since;
         for event in backlog {
             last = event.id;
             yield event;

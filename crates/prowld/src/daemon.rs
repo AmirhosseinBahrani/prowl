@@ -156,13 +156,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         auth: auth.clone(),
         policies: policies.clone(),
         workspace,
-        claude: Claude::new(ClaudeSettings {
-            bin: config.claude_bin.clone(),
-            env: config.claude_env.clone(),
-            model: config.claude_model.clone(),
-            timeout: config.review_timeout,
-            max_budget_usd: config.review_budget_usd,
-        }),
+        claude: claude_for(&config),
         events: events.clone(),
         github: github.clone(),
         queue: queue.clone(),
@@ -192,6 +186,8 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         reviews,
         daily_budget_usd: config.daily_budget_usd,
         power,
+        claude: std::sync::Arc::new(claude_for(&config)),
+        claude_env: config.claude_env.clone(),
         queue,
         poller,
         token: token.clone(),
@@ -265,4 +261,14 @@ fn spawn_policy_sync(
             }
         }
     });
+}
+
+fn claude_for(config: &Config) -> Claude {
+    Claude::new(ClaudeSettings {
+        bin: config.claude_bin.clone(),
+        env: config.claude_env.clone(),
+        model: config.claude_model.clone(),
+        timeout: config.review_timeout,
+        max_budget_usd: config.review_budget_usd,
+    })
 }

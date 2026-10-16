@@ -104,6 +104,17 @@ impl FakeClaude {
         Ok(())
     }
 
+    /// Makes `claude auth status` report logged out (or in again).
+    pub fn set_logged_in(&self, logged_in: bool) -> anyhow::Result<()> {
+        let marker = self.dir.join("logged-out");
+        if logged_in {
+            let _ = std::fs::remove_file(marker);
+        } else {
+            std::fs::write(marker, "")?;
+        }
+        Ok(())
+    }
+
     pub fn invocations(&self) -> anyhow::Result<Vec<ClaudeInvocation>> {
         read_invocations(&self.dir)
     }
