@@ -31,6 +31,17 @@ pub enum Opener {
     Hook(Arc<dyn Fn(&str) + Send + Sync>),
 }
 
+/// A hook run with the screen after every draw.
+pub type AfterDraw = Box<dyn Fn(&Buffer) + Send + Sync>;
+
+/// What the terminal sends the app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Input {
+    Key(KeyEvent),
+    /// The window changed size: redraw to fit.
+    Resize,
+}
+
 pub struct Options {
     /// The daemon home, for installing the background service.
     pub home: PathBuf,
@@ -38,6 +49,8 @@ pub struct Options {
     pub tick: Duration,
     /// If set, receives the screen as text after every draw (tests).
     pub snapshot: Option<Arc<Mutex<String>>>,
+    /// Called with the screen after every draw (e.g. to add clickable links).
+    pub after_draw: Option<AfterDraw>,
     pub editor: Editor,
     pub opener: Opener,
     /// Pauses the key reader while an editor owns the terminal.
@@ -47,7 +60,7 @@ pub struct Options {
 pub async fn run<B: Backend>(
     terminal: &mut Terminal<B>,
     client: ApiClient,
-    mut keys: mpsc::UnboundedReceiver<KeyEvent>,
+    mut keys: mpsc::UnboundedReceiver<Input>,
     options: Options,
 ) -> anyhow::Result<()>
 where
@@ -67,12 +80,21 @@ where
         if let Some(snapshot) = &options.snapshot {
             *snapshot.lock().unwrap() = buffer_text(completed.buffer);
         }
+        if let Some(after_draw) = &options.after_draw {
+            after_draw(completed.buffer);
+        }
         if app.quit {
             break;
         }
         let msg = tokio::select! {
-            key = keys.recv() => match key {
-                Some(key) => Msg::Key(key),
+            input = keys.recv() => match input {
+                Some(Input::Key(key)) => Msg::Key(key),
+                Some(Input::Resize) => {
+                    terminal.autoresize()?;
+                    // Links are re-written per draw, so start the new size from a clean screen.
+                    terminal.clear()?;
+                    continue;
+                }
                 None => break,
             },
             Some(msg) = rx.recv() => msg,

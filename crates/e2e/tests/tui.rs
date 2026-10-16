@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 static OPENED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 struct Tui {
-    keys: mpsc::UnboundedSender<KeyEvent>,
+    keys: mpsc::UnboundedSender<prowl::Input>,
     screen: Arc<Mutex<String>>,
     task: tokio::task::JoinHandle<anyhow::Result<()>>,
 }
@@ -46,6 +46,7 @@ impl Tui {
                     home,
                     tick: Duration::from_millis(100),
                     snapshot: Some(snapshot),
+                    after_draw: None,
                     editor: prowl::Editor::Hook(editor),
                     opener: prowl::Opener::Hook(Arc::new(|url: &str| {
                         OPENED.lock().unwrap().push(url.to_owned())
@@ -103,8 +104,12 @@ impl Tui {
 
     fn press(&self, code: KeyCode) {
         self.keys
-            .send(KeyEvent::new(code, KeyModifiers::NONE))
+            .send(prowl::Input::Key(KeyEvent::new(code, KeyModifiers::NONE)))
             .unwrap();
+    }
+
+    fn resize(&self) {
+        self.keys.send(prowl::Input::Resize).unwrap();
     }
 
     fn type_text(&self, text: &str) {
@@ -660,6 +665,25 @@ async fn the_settings_tab_changes_settings_live() {
     tui.wait_for("acme/api  migrations/**").await;
     let rules = h.client().settings().await.unwrap().file_rules;
     assert_eq!(rules["acme/api"], ["migrations/**"]);
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_resize_redraws_straight_away() {
+    let h = Harness::start().await.unwrap();
+    h.connect_github("octo").await.unwrap();
+    repos(&h);
+    h.client().repos(&RepoQuery::default()).await.unwrap();
+    h.client().watch("acme/api").await.unwrap();
+    let tui = Tui::of(&h);
+    tui.wait_for("1 Queue").await;
+    *tui.screen.lock().unwrap() = String::new();
+
+    tui.resize();
+
+    // Without a key press or tick, the screen is drawn again.
+    tui.wait_for("1 Queue").await;
     tui.quit().await;
     h.shutdown().await.unwrap();
 }

@@ -92,7 +92,12 @@ async fn main() -> anyhow::Result<()> {
                 tokio::select! {
                     event = events.next() => match event {
                         Some(Ok(Event::Key(key))) => {
-                            if keys_tx.send(key).is_err() {
+                            if keys_tx.send(prowl::Input::Key(key)).is_err() {
+                                return;
+                            }
+                        }
+                        Some(Ok(Event::Resize(_, _))) => {
+                            if keys_tx.send(prowl::Input::Resize).is_err() {
                                 return;
                             }
                         }
@@ -121,6 +126,12 @@ async fn main() -> anyhow::Result<()> {
             home,
             tick: Duration::from_secs(5),
             snapshot: None,
+            after_draw: Some(Box::new(|buffer| {
+                let links = prowl::links::find_links(buffer);
+                if !links.is_empty() {
+                    let _ = prowl::links::write_hyperlinks(&mut std::io::stdout(), &links);
+                }
+            })),
             editor: prowl::Editor::System,
             opener: prowl::Opener::System,
             input_paused: Some(paused_tx),

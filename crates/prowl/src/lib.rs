@@ -6,6 +6,7 @@ pub mod cli;
 pub mod feed_tab;
 mod feed_ui;
 pub mod history_tab;
+pub mod links;
 pub mod policy_tab;
 pub(crate) mod policy_ui;
 pub mod queue_tab;
@@ -15,4 +16,4 @@ pub mod settings_tab;
 mod settings_ui;
 pub mod ui;
 
-pub use runtime::{Editor, Opener, Options, run};
+pub use runtime::{Editor, Input, Opener, Options, run};
