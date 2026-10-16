@@ -205,9 +205,13 @@ async fn output_still_invalid_after_repair_is_stored_as_invalid() {
 #[tokio::test]
 async fn a_hanging_run_is_stopped_at_the_timeout() {
     let (mut h, _) = setup(&[7]).await;
-    h.restart_with(|c| c.review_timeout = Duration::from_millis(500))
-        .await
-        .unwrap();
+    // One attempt: this is about stopping a hung run, not about retrying it.
+    h.restart_with(|c| {
+        c.review_timeout = Duration::from_millis(500);
+        c.max_attempts = 1;
+    })
+    .await
+    .unwrap();
     h.claude
         .respond_with(vec![ClaudeResponse {
             delay_ms: 30_000,
