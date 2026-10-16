@@ -6,17 +6,19 @@ use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{self, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::{Auth, AuthError, AuthState};
 use crate::events::EventBus;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
+    pub auth: Auth,
     pub token: String,
     pub events: EventBus,
     pub started: Instant,
@@ -30,12 +32,15 @@ pub struct Status {
     pub pid: u32,
     pub started_at_ms: i64,
     pub uptime_secs: u64,
+    pub github: AuthState,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/v1/status", get(status))
         .route("/v1/events", get(events))
+        .route("/v1/auth", get(auth_state).delete(disconnect))
+        .route("/v1/auth/device", post(start_device_flow))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .with_state(state)
 }
@@ -62,7 +67,44 @@ async fn status(State(state): State<AppState>) -> Json<Status> {
         pid: std::process::id(),
         started_at_ms: state.started_at_ms,
         uptime_secs: state.started.elapsed().as_secs(),
+        github: state.auth.state().await,
     })
+}
+
+async fn auth_state(State(state): State<AppState>) -> Json<AuthState> {
+    Json(state.auth.state().await)
+}
+
+async fn start_device_flow(State(state): State<AppState>) -> Result<Json<AuthState>, ApiError> {
+    match state.auth.start_device_flow().await {
+        Ok(pending) => Ok(Json(pending)),
+        Err(e @ AuthError::NoClientId) => {
+            Err(ApiError(StatusCode::PRECONDITION_FAILED, e.to_string()))
+        }
+        Err(e @ AuthError::GitHub(_)) => Err(ApiError(StatusCode::BAD_GATEWAY, e.to_string())),
+        Err(AuthError::Internal(e)) => Err(ApiError::internal(e)),
+    }
+}
+
+async fn disconnect(State(state): State<AppState>) -> Result<Json<AuthState>, ApiError> {
+    state.auth.disconnect().await.map_err(ApiError::internal)?;
+    Ok(Json(state.auth.state().await))
+}
+
+/// An error answered as `{"error": "..."}` with the given status.
+struct ApiError(StatusCode, String);
+
+impl ApiError {
+    fn internal(e: anyhow::Error) -> Self {
+        tracing::error!(error = %format!("{e:#}"), "request failed");
+        Self(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (self.0, Json(serde_json::json!({ "error": self.1 }))).into_response()
+    }
 }
 
 #[derive(Deserialize)]

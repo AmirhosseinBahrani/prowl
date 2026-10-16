@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -12,12 +12,26 @@ pub struct RecordedRequest {
     pub method: Method,
     pub path: String,
     pub query: Option<String>,
+    /// The body parsed as JSON, if it was JSON.
     pub body: Option<serde_json::Value>,
+    /// The body as sent (e.g. a form-encoded OAuth request).
+    pub raw_body: String,
+}
+
+impl RecordedRequest {
+    /// A field from a form-encoded body.
+    pub fn form_field(&self, name: &str) -> Option<String> {
+        self.raw_body.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            (k == name).then(|| v.replace('+', " ").replace("%3A", ":").replace("%20", " "))
+        })
+    }
 }
 
 #[derive(Default)]
 struct Inner {
-    routes: HashMap<(Method, String), (StatusCode, serde_json::Value)>,
+    /// Responses per route, served in order; the last one repeats.
+    routes: HashMap<(Method, String), VecDeque<(StatusCode, serde_json::Value)>>,
     requests: Vec<RecordedRequest>,
 }
 
@@ -46,11 +60,29 @@ impl FakeGitHub {
 
     /// Scripts the response for `method path` (path without query string).
     pub fn route(&self, method: Method, path: &str, status: StatusCode, body: serde_json::Value) {
+        self.route_seq(method, path, vec![(status, body)]);
+    }
+
+    /// Scripts successive responses for `method path`; the last one repeats.
+    pub fn route_seq(
+        &self,
+        method: Method,
+        path: &str,
+        responses: Vec<(StatusCode, serde_json::Value)>,
+    ) {
+        assert!(!responses.is_empty(), "a route needs at least one response");
         self.inner
             .lock()
             .unwrap()
             .routes
-            .insert((method, path.to_owned()), (status, body));
+            .insert((method, path.to_owned()), responses.into());
+    }
+
+    pub fn requests_to(&self, method: Method, path: &str) -> Vec<RecordedRequest> {
+        self.requests()
+            .into_iter()
+            .filter(|r| r.method == method && r.path == path)
+            .collect()
     }
 
     pub fn requests(&self) -> Vec<RecordedRequest> {
@@ -81,9 +113,17 @@ async fn handle(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
         path: path.clone(),
         query,
         body,
+        raw_body: String::from_utf8_lossy(&bytes).into_owned(),
     });
-    match inner.routes.get(&(method, path)) {
-        Some((status, body)) => (*status, axum::Json(body.clone())).into_response(),
+    match inner.routes.get_mut(&(method, path)) {
+        Some(queue) => {
+            let (status, body) = if queue.len() > 1 {
+                queue.pop_front().expect("non-empty")
+            } else {
+                queue[0].clone()
+            };
+            (status, axum::Json(body)).into_response()
+        }
         None => (
             StatusCode::NOT_FOUND,
             axum::Json(serde_json::json!({ "message": "Not Found" })),

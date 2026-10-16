@@ -7,8 +7,10 @@ mod fake_github;
 pub use fake_claude::{ClaudeInvocation, ClaudeResponse, FakeClaude};
 pub use fake_github::{FakeGitHub, RecordedRequest};
 
-use prowld::{ApiClient, Config, RunningDaemon};
+use prowld::{ApiClient, Config, CredentialBackend, RunningDaemon};
 use tempfile::TempDir;
+
+pub const TEST_CLIENT_ID: &str = "Iv1.testclient";
 
 pub struct Harness {
     pub github: FakeGitHub,
@@ -34,6 +36,10 @@ impl Harness {
     fn config(home: &std::path::Path, github: &FakeGitHub, claude: &FakeClaude) -> Config {
         let mut config = Config::new(home.join("home"));
         config.github_api_url = github.url();
+        config.github_web_url = github.url();
+        config.github_client_id = Some(TEST_CLIENT_ID.into());
+        // Never touch the developer's real keychain from tests.
+        config.credentials = CredentialBackend::File;
         config.claude_bin = Some(claude.bin());
         config.claude_env = claude.env();
         config
@@ -53,6 +59,17 @@ impl Harness {
             daemon.shutdown().await?;
         }
         let config = Self::config(self.home.path(), &self.github, &self.claude);
+        self.daemon = Some(prowld::start(config).await?);
+        Ok(())
+    }
+
+    /// Starts a daemon with a custom config on this harness's home (the fakes are kept).
+    pub async fn restart_with(&mut self, edit: impl FnOnce(&mut Config)) -> anyhow::Result<()> {
+        if let Some(daemon) = self.daemon.take() {
+            daemon.shutdown().await?;
+        }
+        let mut config = Self::config(self.home.path(), &self.github, &self.claude);
+        edit(&mut config);
         self.daemon = Some(prowld::start(config).await?);
         Ok(())
     }

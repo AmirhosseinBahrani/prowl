@@ -9,6 +9,9 @@ app as its client.
 
 ## Development
 
+On Linux, install the D-Bus headers first (used for the Secret Service credential store):
+`sudo apt-get install libdbus-1-dev pkg-config`.
+
 ```sh
 cargo test --workspace     # unit tests + end-to-end tests against fake GitHub and fake claude
 cargo run -p prowld        # run the daemon in the foreground
