@@ -12,7 +12,9 @@ use serde::de::DeserializeOwned;
 
 use crate::auth::AuthState;
 use crate::events::Event;
+use crate::jobs::Job;
 use crate::policy::{EffectivePolicy, PolicyVersion, Scope};
+use crate::poller::PollSummary;
 use crate::repos::{Repo, RepoPage, RepoQuery};
 use crate::server::Status;
 use crate::transport::{self, Endpoint};
@@ -138,6 +140,15 @@ impl ApiClient {
         }
         self.get_json(&format!("/v1/repos?{}", params.join("&")))
             .await
+    }
+
+    /// Polls GitHub for review requests now and returns what happened.
+    pub async fn poll_now(&self) -> Result<PollSummary, ClientError> {
+        self.call_json(Method::POST, "/v1/poll").await
+    }
+
+    pub async fn jobs(&self) -> Result<Vec<Job>, ClientError> {
+        self.get_json("/v1/jobs").await
     }
 
     pub async fn watched_repos(&self) -> Result<Vec<Repo>, ClientError> {

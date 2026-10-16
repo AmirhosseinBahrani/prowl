@@ -11,7 +11,9 @@ use crate::config::{self, Config};
 use crate::credentials::CredentialStore;
 use crate::events::{self, EventBus};
 use crate::github::GitHub;
+use crate::jobs::Jobs;
 use crate::policy::PolicyStore;
+use crate::poller::{PollSettings, Poller};
 use crate::repos::Repos;
 use crate::server::{self, AppState};
 use crate::store;
@@ -91,10 +93,27 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         shutdown.clone(),
     );
 
+    let repos = Repos::new(db.clone(), github.clone(), auth.clone(), events.clone());
+    let jobs = Jobs::new(db.clone());
+    let poller = Poller::new(
+        github,
+        auth.clone(),
+        repos.clone(),
+        jobs.clone(),
+        events.clone(),
+        PollSettings {
+            include_team_requests: config.include_team_requests,
+            skip_drafts: config.skip_drafts,
+        },
+    );
+    poller.spawn(config.poll_interval, shutdown.clone());
+
     let state = AppState {
         auth: auth.clone(),
         policies,
-        repos: Repos::new(db.clone(), github, auth.clone(), events.clone()),
+        repos,
+        jobs,
+        poller,
         token: token.clone(),
         events: events.clone(),
         started: Instant::now(),
