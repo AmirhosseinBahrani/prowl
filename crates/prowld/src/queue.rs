@@ -148,6 +148,22 @@ impl Queue {
         Ok(())
     }
 
+    /// Takes a PR out of the queue because a newer review no longer needs a human.
+    pub(crate) async fn supersede(&self, repo: &str, pr_number: u64) -> anyhow::Result<()> {
+        let pending: Option<i64> = sqlx::query_scalar(
+            "SELECT pr_number FROM human_queue WHERE repo = ? AND pr_number = ? AND status = 'pending'",
+        )
+        .bind(repo)
+        .bind(pr_number as i64)
+        .fetch_optional(&self.db)
+        .await?;
+        if pending.is_some() {
+            self.mark(repo, pr_number, "dismissed", "superseded")
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Pending items, riskiest first: unusable reviews, then by severity, then oldest.
     pub(crate) async fn pending(&self) -> Result<Vec<QueueItem>, QueueError> {
         let mut items = self.items("WHERE q.status = 'pending'", None).await?;

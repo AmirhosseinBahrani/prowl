@@ -4,6 +4,7 @@
 use crate::decider::{Decision, Reason};
 use crate::diff_lines::DiffLines;
 use crate::github::{GitHub, GitHubError, InlineComment, NewReview, Submitted};
+use crate::publications::Prior;
 use crate::review::{Finding, ReviewOutput};
 
 pub const LABEL_AGENT_REVIEWED: &str = "prowl:agent-reviewed";
@@ -109,21 +110,112 @@ pub(crate) async fn agent_only(
     Ok(submitted)
 }
 
-/// Posts a NEEDS_HUMAN result as a PR comment — deliberately not a review, so the user stays
-/// a requested reviewer — and labels the PR. `review` is `None` when the output was unusable.
-pub(crate) async fn needs_human(
+/// Publishes a decided review, reusing what PRowl posted on this PR before (`prior`, updated
+/// in place to describe what is now posted):
+/// - AGENT_ONLY: a new COMMENT review (inline notes need the new commit). The previous agent
+///   review is marked superseded, and a waiting-for-approval comment is marked resolved.
+/// - NEEDS_HUMAN: the waiting-for-approval comment, edited if it exists. A previous agent
+///   review is marked superseded and its label removed.
+pub(crate) async fn publish_result(
     github: &GitHub,
     token: &str,
     target: &Target<'_>,
-    review: Option<&ReviewOutput>,
+    decision: Decision,
+    review: Result<&ReviewOutput, &str>,
     reasons: &[Reason],
+    prior: &mut Prior,
 ) -> Result<Submitted, GitHubError> {
-    let body = needs_human_body(target, review, reasons);
-    let comment = github
-        .create_issue_comment(token, target.repo, target.number, &body)
-        .await?;
-    add_label(github, token, target.repo, target.number, LABEL_NEEDS_HUMAN).await?;
-    Ok(comment)
+    match (decision, review) {
+        (Decision::AgentOnly, Ok(review)) => {
+            let posted = agent_only(github, token, target, review).await?;
+            if let Some((old, _)) = prior.agent_review.take() {
+                let body = superseded_body(target, &posted.html_url);
+                ignore_missing(
+                    github
+                        .update_review(token, target.repo, target.number, old, &body)
+                        .await,
+                )?;
+            }
+            if let Some((comment, _)) = &prior.comment {
+                let body = resolved_body(target, &posted.html_url);
+                ignore_missing(
+                    github
+                        .update_issue_comment(token, target.repo, *comment, &body)
+                        .await,
+                )?;
+                github
+                    .remove_label(token, target.repo, target.number, LABEL_NEEDS_HUMAN)
+                    .await?;
+            }
+            prior.agent_review = Some((posted.id, posted.html_url.clone()));
+            Ok(posted)
+        }
+        _ => {
+            let body = needs_human_body(target, review.ok(), reasons);
+            let existing = match &prior.comment {
+                Some((id, _)) => ignore_missing(
+                    github
+                        .update_issue_comment(token, target.repo, *id, &body)
+                        .await,
+                )?,
+                None => None,
+            };
+            let comment = match existing {
+                Some(updated) => updated,
+                // First time, or someone deleted PRowl's comment.
+                None => {
+                    github
+                        .create_issue_comment(token, target.repo, target.number, &body)
+                        .await?
+                }
+            };
+            add_label(github, token, target.repo, target.number, LABEL_NEEDS_HUMAN).await?;
+            if let Some((old, _)) = prior.agent_review.take() {
+                let body = superseded_body(target, &comment.html_url);
+                ignore_missing(
+                    github
+                        .update_review(token, target.repo, target.number, old, &body)
+                        .await,
+                )?;
+                github
+                    .remove_label(token, target.repo, target.number, LABEL_AGENT_REVIEWED)
+                    .await?;
+            }
+            prior.comment = Some((comment.id, comment.html_url.clone()));
+            Ok(comment)
+        }
+    }
+}
+
+/// Treats "it's gone" (someone deleted it) as nothing to update.
+fn ignore_missing<T>(result: Result<T, GitHubError>) -> Result<Option<T>, GitHubError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(GitHubError::Status { status, .. }) if status == reqwest::StatusCode::NOT_FOUND => {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn superseded_body(target: &Target<'_>, latest_url: &str) -> String {
+    format!(
+        "### 🤖 PRowl automated review — superseded\n\n\
+         This review is out of date: PRowl reviewed a newer commit ({}). \
+         [See the latest result]({latest_url}).\n{}",
+        short(target.head_sha),
+        marker(target)
+    )
+}
+
+fn resolved_body(target: &Target<'_>, review_url: &str) -> String {
+    format!(
+        "### ✅ No longer waiting for human approval\n\n\
+         PRowl reviewed commit {} and, under the review policy, it no longer needs a human \
+         review. [See the agent's review]({review_url}).\n{}",
+        short(target.head_sha),
+        marker(target)
+    )
 }
 
 pub(crate) fn needs_human_body(

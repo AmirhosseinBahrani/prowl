@@ -16,6 +16,7 @@ use crate::github::GitHub;
 use crate::jobs::Jobs;
 use crate::policy::PolicyStore;
 use crate::poller::{PollSettings, Poller};
+use crate::publications::Publications;
 use crate::queue::Queue;
 use crate::repos::Repos;
 use crate::reviews::Reviews;
@@ -144,6 +145,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         events: events.clone(),
         github: github.clone(),
         queue: queue.clone(),
+        publications: Publications::new(db.clone()),
         decision: DecisionSettings {
             risk_threshold: config.risk_threshold,
         },

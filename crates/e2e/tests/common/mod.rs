@@ -128,6 +128,18 @@ pub fn accept_writes(h: &Harness, n: u64) {
         json!({ "id": 700 + n, "html_url": format!("https://github.com/{REPO}/pull/{n}#issuecomment-{}", 700 + n) }),
     );
     h.github.route(
+        Method::PATCH,
+        &format!("/repos/{REPO}/issues/comments/{}", 700 + n),
+        StatusCode::OK,
+        json!({ "id": 700 + n, "html_url": format!("https://github.com/{REPO}/pull/{n}#issuecomment-{}", 700 + n) }),
+    );
+    h.github.route(
+        Method::PUT,
+        &format!("/repos/{REPO}/pulls/{n}/reviews/{}", 900 + n),
+        StatusCode::OK,
+        json!({ "id": 900 + n, "html_url": format!("https://github.com/{REPO}/pull/{n}#pullrequestreview-{}", 900 + n) }),
+    );
+    h.github.route(
         Method::POST,
         &format!("/repos/{REPO}/labels"),
         StatusCode::CREATED,
@@ -204,4 +216,62 @@ pub fn worktrees_left(h: &Harness) -> usize {
     std::fs::read_dir(h.daemon().home().join("wt"))
         .map(|d| d.count())
         .unwrap_or(0)
+}
+
+/// A review the policy lets the agent handle alone.
+pub fn calm_review() -> Value {
+    json!({
+        "summary": "Renames a helper.",
+        "quick_notes": ["Pure rename"],
+        "risk_score": 10,
+        "severity": "low",
+        "touches_critical_sections": false,
+        "matched_policy_rules": [],
+        "findings": [],
+        "recommendation": "comment"
+    })
+}
+
+/// Pushes a new commit to PR `n` (a new head SHA) and serves it, requesting `reviewers`.
+pub fn push_new_commit(h: &Harness, n: u64, reviewers: &[&str]) -> PrCommits {
+    let commits = h
+        .git
+        .create_pr(
+            REPO,
+            n,
+            &[("README.md", "# api\n")],
+            &[(&format!("src/login_{n}.rs"), "fn login() { /* v2 */ }\n")],
+        )
+        .unwrap();
+    h.github.route(
+        Method::GET,
+        &format!("/repos/{REPO}/pulls/{n}"),
+        StatusCode::OK,
+        pr_json(n, &commits, reviewers),
+    );
+    commits
+}
+
+/// Waits until `count` jobs for PR `n` are done.
+pub async fn wait_for_reviews(h: &Harness, n: u64, count: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let done = h
+            .client()
+            .jobs()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|j| j.pr_number == n && j.status == "done")
+            .count();
+        if done >= count {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "jobs: {:?}",
+            h.client().jobs().await.unwrap()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }

@@ -16,6 +16,7 @@ use crate::jobs::{Job, Jobs};
 use crate::policy::{PolicyStore, Scope};
 use crate::poller::{Poller, Recheck};
 use crate::prompt::{self, PrContext};
+use crate::publications::Publications;
 use crate::publish::{self, Target};
 use crate::queue::Queue;
 use crate::review::{self, ReviewOutput};
@@ -53,6 +54,7 @@ struct Inner {
     events: EventBus,
     github: GitHub,
     queue: Queue,
+    publications: Publications,
     decision: DecisionSettings,
     slots: Arc<Semaphore>,
 }
@@ -68,6 +70,7 @@ pub(crate) struct WorkerParts {
     pub events: EventBus,
     pub github: GitHub,
     pub queue: Queue,
+    pub publications: Publications,
     pub decision: DecisionSettings,
     pub concurrency: usize,
 }
@@ -87,6 +90,7 @@ impl Worker {
                 events: parts.events,
                 github: parts.github,
                 queue: parts.queue,
+                publications: parts.publications,
                 decision: parts.decision,
             }),
         }
@@ -281,21 +285,27 @@ impl Worker {
             policy_scope: &policy.scope,
             policy_version_id: policy.version_id,
         };
-        let submitted = match (verdict.decision, &output) {
-            (Decision::AgentOnly, Ok(output)) => {
-                publish::agent_only(&inner.github, &token, &target, output).await?
-            }
-            _ => {
-                publish::needs_human(
-                    &inner.github,
-                    &token,
-                    &target,
-                    output.as_ref().ok(),
-                    &verdict.reasons,
-                )
-                .await?
-            }
-        };
+        let mut prior = inner.publications.prior(&job.repo, job.pr_number).await?;
+        let submitted = publish::publish_result(
+            &inner.github,
+            &token,
+            &target,
+            verdict.decision,
+            output.as_ref().map_err(String::as_str),
+            &verdict.reasons,
+            &mut prior,
+        )
+        .await?;
+        inner
+            .publications
+            .save(
+                &job.repo,
+                job.pr_number,
+                &job.head_sha,
+                verdict.decision,
+                &prior,
+            )
+            .await?;
         inner
             .reviews
             .set_published(review_id, submitted.id, &submitted.html_url)
@@ -306,6 +316,9 @@ impl Worker {
                 .queue
                 .add(&job.repo, job.pr_number, &job.head_sha, review_id)
                 .await?;
+        } else {
+            // A newer commit no longer needs a human: it leaves the queue.
+            inner.queue.supersede(&job.repo, job.pr_number).await?;
         }
         self.emit(
             kind::PUBLISHED,

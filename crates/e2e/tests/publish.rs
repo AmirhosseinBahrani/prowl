@@ -7,7 +7,7 @@ use prowld::{Decision, Reason};
 use serde_json::{Value, json};
 
 /// A review that should stay with the agent: low risk, no policy rules, nothing critical.
-fn calm_review() -> Value {
+fn calm_review_with_findings() -> Value {
     json!({
         "summary": "Renames a helper and updates its callers.",
         "quick_notes": ["Pure rename", "No behaviour change"],
@@ -44,7 +44,7 @@ async fn reviewed(h: &Harness, review: &Value) -> prowld::Review {
 async fn an_agent_only_review_is_posted_as_a_comment_review() {
     let (h, commits) = setup(&[7]).await;
 
-    let review = reviewed(&h, &calm_review()).await;
+    let review = reviewed(&h, &calm_review_with_findings()).await;
 
     assert_eq!(review.decision, Some(Decision::AgentOnly));
     assert!(review.decision_reasons.is_empty());
@@ -102,7 +102,7 @@ async fn an_agent_only_review_is_posted_as_a_comment_review() {
 #[tokio::test]
 async fn prowl_never_approves() {
     let (h, _) = setup(&[7]).await;
-    let mut eager = calm_review();
+    let mut eager = calm_review_with_findings();
     eager["recommendation"] = "approve".into();
 
     reviewed(&h, &eager).await;
@@ -172,7 +172,7 @@ async fn the_risk_threshold_is_configurable() {
     let (mut h, _) = setup(&[7]).await;
     h.restart_with(|c| c.risk_threshold = 10).await.unwrap();
 
-    let review = reviewed(&h, &calm_review()).await;
+    let review = reviewed(&h, &calm_review_with_findings()).await;
 
     assert_eq!(review.decision, Some(Decision::NeedsHuman));
     assert_eq!(
@@ -189,7 +189,7 @@ async fn the_risk_threshold_is_configurable() {
 async fn decisions_are_announced() {
     let (h, _) = setup(&[7]).await;
 
-    reviewed(&h, &calm_review()).await;
+    reviewed(&h, &calm_review_with_findings()).await;
 
     let all = events(&h).await;
     let decided = all
