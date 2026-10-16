@@ -7,6 +7,38 @@ use crate::github::{GitHub, GitHubError, InlineComment, NewReview, Submitted};
 use crate::review::{Finding, ReviewOutput};
 
 pub const LABEL_AGENT_REVIEWED: &str = "prowl:agent-reviewed";
+pub const LABEL_NEEDS_HUMAN: &str = "prowl:needs-human";
+pub const LABEL_HUMAN_APPROVED: &str = "prowl:human-approved";
+pub const LABEL_CHANGES_REQUESTED: &str = "prowl:changes-requested";
+
+/// `(name, colour, description)` for every label PRowl manages.
+pub(crate) fn label_spec(name: &str) -> (&'static str, &'static str) {
+    match name {
+        LABEL_AGENT_REVIEWED => (
+            "0e8a16",
+            "Reviewed by the PRowl agent; no human review required by policy",
+        ),
+        LABEL_NEEDS_HUMAN => ("d93f0b", "PRowl: waiting for a human review before merging"),
+        LABEL_HUMAN_APPROVED => ("1d76db", "PRowl: approved by a human reviewer"),
+        LABEL_CHANGES_REQUESTED => ("e99695", "PRowl: a human reviewer requested changes"),
+        _ => ("ededed", "PRowl"),
+    }
+}
+
+/// Makes sure `label` exists in the repository and is on the PR.
+pub(crate) async fn add_label(
+    github: &GitHub,
+    token: &str,
+    repo: &str,
+    number: u64,
+    label: &str,
+) -> Result<(), GitHubError> {
+    let (color, description) = label_spec(label);
+    github
+        .ensure_label(token, repo, label, color, description)
+        .await?;
+    github.add_labels(token, repo, number, &[label]).await
+}
 
 /// What a published review is about.
 pub(crate) struct Target<'a> {
@@ -66,19 +98,109 @@ pub(crate) async fn agent_only(
             },
         )
         .await?;
-    github
-        .ensure_label(
-            token,
-            target.repo,
-            LABEL_AGENT_REVIEWED,
-            "0e8a16",
-            "Reviewed by the PRowl agent; no human review required by policy",
-        )
-        .await?;
-    github
-        .add_labels(token, target.repo, target.number, &[LABEL_AGENT_REVIEWED])
-        .await?;
+    add_label(
+        github,
+        token,
+        target.repo,
+        target.number,
+        LABEL_AGENT_REVIEWED,
+    )
+    .await?;
     Ok(submitted)
+}
+
+/// Posts a NEEDS_HUMAN result as a PR comment — deliberately not a review, so the user stays
+/// a requested reviewer — and labels the PR. `review` is `None` when the output was unusable.
+pub(crate) async fn needs_human(
+    github: &GitHub,
+    token: &str,
+    target: &Target<'_>,
+    review: Option<&ReviewOutput>,
+    reasons: &[Reason],
+) -> Result<Submitted, GitHubError> {
+    let body = needs_human_body(target, review, reasons);
+    let comment = github
+        .create_issue_comment(token, target.repo, target.number, &body)
+        .await?;
+    add_label(github, token, target.repo, target.number, LABEL_NEEDS_HUMAN).await?;
+    Ok(comment)
+}
+
+pub(crate) fn needs_human_body(
+    target: &Target<'_>,
+    review: Option<&ReviewOutput>,
+    reasons: &[Reason],
+) -> String {
+    let mut body = String::new();
+    body.push_str(
+        "### ⏳ Waiting for human approval
+
+",
+    );
+    body.push_str(&format!(
+        "> 🤖 PRowl's AI agent reviewed this pull request on behalf of @{}. Under the review \
+         policy it **needs a human review before merging**:\n",
+        target.reviewer
+    ));
+    for reason in reasons {
+        body.push_str(&format!("> - {}\n", reason_line(reason)));
+    }
+    body.push('\n');
+    match review {
+        Some(review) => {
+            body.push_str(&format!(
+                "**Agent's summary:** {}\n\n",
+                review.summary.trim()
+            ));
+            body.push_str(&format!(
+                "**Severity:** {} · **Risk:** {}/100\n\n",
+                severity_word(review),
+                review.risk_score
+            ));
+            if !review.quick_notes.is_empty() {
+                body.push_str("**Quick notes**\n");
+                for note in &review.quick_notes {
+                    body.push_str(&format!("- {}\n", note.trim()));
+                }
+                body.push('\n');
+            }
+            let findings: Vec<&Finding> = review.findings.iter().collect();
+            push_findings(&mut body, &findings);
+        }
+        None => body.push_str(
+            "The agent could not produce a usable review, so there are no automated notes.\n\n",
+        ),
+    }
+    body.push_str(&format!(
+        "<sub>Commit {} · policy {} v{} · this comment is automated; the approval must come from a person.</sub>\n{}",
+        short(target.head_sha),
+        target.policy_scope,
+        target.policy_version_id,
+        marker(target)
+    ));
+    body
+}
+
+fn reason_line(reason: &Reason) -> String {
+    match reason {
+        Reason::InvalidOutput { detail } => format!("The automated review was unusable ({detail})"),
+        Reason::PolicyRule { id, evidence } if evidence.trim().is_empty() => {
+            format!("Matched **[{id}]**")
+        }
+        Reason::PolicyRule { id, evidence } => format!("Matched **[{id}]** — {}", evidence.trim()),
+        Reason::UnknownPolicyRule { id } => format!("Cited **[{id}]**, which is not in the policy"),
+        Reason::CriticalSection => "Touches code the policy treats as critical".to_owned(),
+        Reason::Severity { severity } => format!(
+            "Severity **{}**",
+            serde_json::to_value(severity)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        ),
+        Reason::RiskScore { score, threshold } => {
+            format!("Risk score **{score}** (threshold {threshold})")
+        }
+    }
 }
 
 pub(crate) fn agent_only_body(
@@ -105,25 +227,7 @@ pub(crate) fn agent_only_body(
         }
         body.push('\n');
     }
-    if !other_findings.is_empty() {
-        body.push_str("**Findings**\n");
-        for f in other_findings {
-            let location = match f.line {
-                Some(line) => format!("{}:{line}", f.file),
-                None => f.file.clone(),
-            };
-            body.push_str(&format!(
-                "- **{}** `{location}` — {}: {}\n",
-                severity_name(f),
-                f.title.trim(),
-                f.body.trim()
-            ));
-            if let Some(s) = f.suggestion.as_deref().filter(|s| !s.trim().is_empty()) {
-                body.push_str(&format!("  - Suggestion: {}\n", s.trim()));
-            }
-        }
-        body.push('\n');
-    }
+    push_findings(&mut body, other_findings);
     body.push_str(&format!(
         "<sub>Commit {} · policy {} v{}</sub>\n{}",
         short(target.head_sha),
@@ -132,6 +236,29 @@ pub(crate) fn agent_only_body(
         marker(target)
     ));
     body
+}
+
+fn push_findings(body: &mut String, findings: &[&Finding]) {
+    if findings.is_empty() {
+        return;
+    }
+    body.push_str("**Findings**\n");
+    for f in findings {
+        let location = match f.line {
+            Some(line) => format!("{}:{line}", f.file),
+            None => f.file.clone(),
+        };
+        body.push_str(&format!(
+            "- **{}** `{location}` — {}: {}\n",
+            severity_name(f),
+            f.title.trim(),
+            f.body.trim()
+        ));
+        if let Some(s) = f.suggestion.as_deref().filter(|s| !s.trim().is_empty()) {
+            body.push_str(&format!("  - Suggestion: {}\n", s.trim()));
+        }
+    }
+    body.push('\n');
 }
 
 fn finding_comment(f: &Finding) -> String {

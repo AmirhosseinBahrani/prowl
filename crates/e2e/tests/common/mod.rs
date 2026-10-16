@@ -79,6 +79,7 @@ pub async fn setup(numbers: &[u64]) -> (Harness, Vec<PrCommits>) {
             StatusCode::OK,
             pr_json(number, &commits, &["octo"]),
         );
+        accept_writes(&h, number);
         all.push(commits);
     }
     let refs: Vec<(u64, &PrCommits)> = numbers.iter().copied().zip(all.iter()).collect();
@@ -95,8 +96,57 @@ pub fn serve_prs(h: &Harness, prs: &[(u64, &PrCommits)]) {
             StatusCode::OK,
             pr_json(*number, commits, &["octo"]),
         );
+        accept_writes(h, *number);
     }
     serve_search(h, prs);
+}
+
+/// Answers everything PRowl writes for PR `n` the way GitHub does.
+pub fn accept_writes(h: &Harness, n: u64) {
+    h.github.route(
+        Method::GET,
+        &format!("/repos/{REPO}/pulls/{n}/files"),
+        StatusCode::OK,
+        json!([{ "filename": format!("src/login_{n}.rs"), "patch": "@@ -0,0 +1 @@\n+fn login() {}" }]),
+    );
+    h.github.route(
+        Method::POST,
+        &format!("/repos/{REPO}/pulls/{n}/reviews"),
+        StatusCode::OK,
+        json!({ "id": 900 + n, "html_url": format!("https://github.com/{REPO}/pull/{n}#pullrequestreview-{}", 900 + n) }),
+    );
+    h.github.route(
+        Method::GET,
+        &format!("/repos/{REPO}/pulls/{n}/reviews"),
+        StatusCode::OK,
+        json!([]),
+    );
+    h.github.route(
+        Method::POST,
+        &format!("/repos/{REPO}/issues/{n}/comments"),
+        StatusCode::CREATED,
+        json!({ "id": 700 + n, "html_url": format!("https://github.com/{REPO}/pull/{n}#issuecomment-{}", 700 + n) }),
+    );
+    h.github.route(
+        Method::POST,
+        &format!("/repos/{REPO}/labels"),
+        StatusCode::CREATED,
+        json!({}),
+    );
+    h.github.route(
+        Method::POST,
+        &format!("/repos/{REPO}/issues/{n}/labels"),
+        StatusCode::OK,
+        json!([]),
+    );
+    for label in ["prowl%3Aneeds-human", "prowl%3Aagent-reviewed"] {
+        h.github.route(
+            Method::DELETE,
+            &format!("/repos/{REPO}/issues/{n}/labels/{label}"),
+            StatusCode::OK,
+            json!([]),
+        );
+    }
 }
 
 fn serve_search(h: &Harness, prs: &[(u64, &PrCommits)]) {

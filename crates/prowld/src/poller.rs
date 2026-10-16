@@ -15,6 +15,7 @@ use crate::gate::{self, GateContext, GateOutcome, GateReason, PrFacts};
 use crate::github::{GitHub, GitHubError, PrRef, PullRequest};
 use crate::jobs::Job;
 use crate::jobs::{Jobs, NewJob};
+use crate::queue::Queue;
 use crate::repos::Repos;
 
 /// Below this many remaining API calls, polling pauses until the limit resets.
@@ -81,6 +82,7 @@ struct Inner {
     repos: Repos,
     jobs: Jobs,
     events: EventBus,
+    queue: Queue,
     settings: PollSettings,
     /// Held for the duration of a poll so scheduled and on-demand polls never overlap.
     running: Mutex<()>,
@@ -96,6 +98,7 @@ impl Poller {
         repos: Repos,
         jobs: Jobs,
         events: EventBus,
+        queue: Queue,
         settings: PollSettings,
     ) -> Self {
         Self {
@@ -105,6 +108,7 @@ impl Poller {
                 repos,
                 jobs,
                 events,
+                queue,
                 settings,
                 running: Mutex::new(()),
                 reported: Mutex::default(),
@@ -148,6 +152,10 @@ impl Poller {
             }
         };
         if summary.skipped.is_none() {
+            // PRs waiting on the user may have been reviewed on GitHub or closed meanwhile.
+            if let Err(e) = self.inner.queue.sync_with_github().await {
+                tracing::warn!(error = %e, "checking the human review queue failed");
+            }
             let _ = self
                 .inner
                 .events

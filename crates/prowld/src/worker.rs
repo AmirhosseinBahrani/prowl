@@ -17,6 +17,7 @@ use crate::policy::{PolicyStore, Scope};
 use crate::poller::{Poller, Recheck};
 use crate::prompt::{self, PrContext};
 use crate::publish::{self, Target};
+use crate::queue::Queue;
 use crate::review::{self, ReviewOutput};
 use crate::reviews::{NewReview, Reviews};
 use crate::workspace::{Checkout, Workspace};
@@ -51,6 +52,7 @@ struct Inner {
     claude: Claude,
     events: EventBus,
     github: GitHub,
+    queue: Queue,
     decision: DecisionSettings,
     slots: Arc<Semaphore>,
 }
@@ -65,6 +67,7 @@ pub(crate) struct WorkerParts {
     pub claude: Claude,
     pub events: EventBus,
     pub github: GitHub,
+    pub queue: Queue,
     pub decision: DecisionSettings,
     pub concurrency: usize,
 }
@@ -83,6 +86,7 @@ impl Worker {
                 claude: parts.claude,
                 events: parts.events,
                 github: parts.github,
+                queue: parts.queue,
                 decision: parts.decision,
             }),
         }
@@ -269,27 +273,50 @@ impl Worker {
         )
         .await;
 
-        if let (Decision::AgentOnly, Ok(output)) = (verdict.decision, &output) {
-            let target = Target {
-                repo: &job.repo,
-                number: job.pr_number,
-                head_sha: &job.head_sha,
-                reviewer: &reviewer,
-                policy_scope: &policy.scope,
-                policy_version_id: policy.version_id,
-            };
-            let submitted = publish::agent_only(&inner.github, &token, &target, output).await?;
+        let target = Target {
+            repo: &job.repo,
+            number: job.pr_number,
+            head_sha: &job.head_sha,
+            reviewer: &reviewer,
+            policy_scope: &policy.scope,
+            policy_version_id: policy.version_id,
+        };
+        let submitted = match (verdict.decision, &output) {
+            (Decision::AgentOnly, Ok(output)) => {
+                publish::agent_only(&inner.github, &token, &target, output).await?
+            }
+            _ => {
+                publish::needs_human(
+                    &inner.github,
+                    &token,
+                    &target,
+                    output.as_ref().ok(),
+                    &verdict.reasons,
+                )
+                .await?
+            }
+        };
+        inner
+            .reviews
+            .set_published(review_id, submitted.id, &submitted.html_url)
+            .await?;
+        // Only once the comment link is stored, so the queue never shows an item without it.
+        if verdict.decision == Decision::NeedsHuman {
             inner
-                .reviews
-                .set_published(review_id, submitted.id, &submitted.html_url)
+                .queue
+                .add(&job.repo, job.pr_number, &job.head_sha, review_id)
                 .await?;
-            self.emit(
-                kind::PUBLISHED,
-                job,
-                serde_json::json!({ "review_id": review_id, "url": submitted.html_url }),
-            )
-            .await;
         }
+        self.emit(
+            kind::PUBLISHED,
+            job,
+            serde_json::json!({
+                "review_id": review_id,
+                "decision": verdict.decision,
+                "url": submitted.html_url,
+            }),
+        )
+        .await;
         inner.jobs.finish(job.id, "done", None).await?;
         Ok(())
     }

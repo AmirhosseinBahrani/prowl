@@ -15,6 +15,7 @@ use crate::events::Event;
 use crate::jobs::Job;
 use crate::policy::{EffectivePolicy, PolicyVersion, Scope};
 use crate::poller::PollSummary;
+use crate::queue::{QueueDetail, QueueItem};
 use crate::repos::{Repo, RepoPage, RepoQuery};
 use crate::reviews::Review;
 use crate::server::Status;
@@ -153,6 +154,53 @@ impl ApiClient {
             Some(id) => self.get_json(&format!("/v1/reviews?job_id={id}")).await,
             None => self.get_json("/v1/reviews").await,
         }
+    }
+
+    /// PRs waiting for the user's review, riskiest first.
+    pub async fn queue(&self) -> Result<Vec<QueueItem>, ClientError> {
+        self.get_json("/v1/queue").await
+    }
+
+    /// One queued PR with its diff.
+    pub async fn queue_item(&self, repo: &str, number: u64) -> Result<QueueDetail, ClientError> {
+        self.get_json(&format!("/v1/queue/{repo}/{number}")).await
+    }
+
+    /// Approves the PR on GitHub as the user and removes it from the queue.
+    pub async fn approve(
+        &self,
+        repo: &str,
+        number: u64,
+        comment: &str,
+    ) -> Result<QueueItem, ClientError> {
+        let body = serde_json::json!({ "comment": comment });
+        self.call_json_body(
+            Method::POST,
+            &format!("/v1/queue/{repo}/{number}/approve"),
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn request_changes(
+        &self,
+        repo: &str,
+        number: u64,
+        comment: &str,
+    ) -> Result<QueueItem, ClientError> {
+        let body = serde_json::json!({ "comment": comment });
+        self.call_json_body(
+            Method::POST,
+            &format!("/v1/queue/{repo}/{number}/request-changes"),
+            Some(body),
+        )
+        .await
+    }
+
+    /// Removes the PR from the queue without doing anything on GitHub.
+    pub async fn dismiss(&self, repo: &str, number: u64) -> Result<QueueItem, ClientError> {
+        self.call_json(Method::POST, &format!("/v1/queue/{repo}/{number}/dismiss"))
+            .await
     }
 
     pub async fn jobs(&self) -> Result<Vec<Job>, ClientError> {

@@ -1,6 +1,6 @@
 mod common;
 
-use axum::http::{Method, StatusCode};
+use axum::http::Method;
 use common::*;
 use prowl_e2e::{ClaudeResponse, Harness};
 use prowld::{Decision, Reason};
@@ -30,38 +30,10 @@ fn calm_review() -> Value {
     })
 }
 
-fn script_github_writes(h: &Harness) {
-    h.github.route(
-        Method::GET,
-        &format!("/repos/{REPO}/pulls/7/files"),
-        StatusCode::OK,
-        json!([{ "filename": "src/login_7.rs", "patch": "@@ -0,0 +1 @@\n+fn login() {}" }]),
-    );
-    h.github.route(
-        Method::POST,
-        &format!("/repos/{REPO}/pulls/7/reviews"),
-        StatusCode::OK,
-        json!({ "id": 99, "html_url": format!("https://github.com/{REPO}/pull/7#pullrequestreview-99") }),
-    );
-    h.github.route(
-        Method::POST,
-        &format!("/repos/{REPO}/labels"),
-        StatusCode::CREATED,
-        json!({}),
-    );
-    h.github.route(
-        Method::POST,
-        &format!("/repos/{REPO}/issues/7/labels"),
-        StatusCode::OK,
-        json!([]),
-    );
-}
-
 async fn reviewed(h: &Harness, review: &Value) -> prowld::Review {
     h.claude
         .respond_with(vec![ClaudeResponse::review(review)])
         .unwrap();
-    script_github_writes(h);
     h.client().poll_now().await.unwrap();
     let job = wait_for_job(h, |j| j.status == "done" || j.status == "failed").await;
     assert_eq!(job.status, "done", "{:?}", job.error);
@@ -78,7 +50,7 @@ async fn an_agent_only_review_is_posted_as_a_comment_review() {
     assert!(review.decision_reasons.is_empty());
     assert_eq!(
         review.published_url.as_deref(),
-        Some("https://github.com/acme/api/pull/7#pullrequestreview-99")
+        Some("https://github.com/acme/api/pull/7#pullrequestreview-907")
     );
 
     let posted = h
@@ -147,7 +119,7 @@ async fn prowl_never_approves() {
 }
 
 #[tokio::test]
-async fn a_matched_policy_rule_needs_a_human_and_posts_no_review() {
+async fn a_matched_policy_rule_needs_a_human_and_submits_no_review() {
     let (h, _) = setup(&[7]).await;
 
     let review = reviewed(&h, &valid_review()).await;
@@ -163,7 +135,11 @@ async fn a_matched_policy_rule_needs_a_human_and_posts_no_review() {
             .requests_to(Method::POST, &format!("/repos/{REPO}/pulls/7/reviews"))
             .is_empty()
     );
-    assert!(review.published_url.is_none());
+    // Published as a PR comment (ticket 08), never as a review.
+    assert_eq!(
+        review.published_url.as_deref(),
+        Some("https://github.com/acme/api/pull/7#issuecomment-707")
+    );
     h.shutdown().await.unwrap();
 }
 
@@ -173,7 +149,6 @@ async fn unusable_output_needs_a_human() {
     h.claude
         .respond_with(vec![ClaudeResponse::answer("LGTM")])
         .unwrap();
-    script_github_writes(&h);
 
     h.client().poll_now().await.unwrap();
     let job = wait_for_job(&h, finished("done")).await;

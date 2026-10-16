@@ -18,6 +18,7 @@ use crate::events::EventBus;
 use crate::jobs::{Job, Jobs};
 use crate::policy::PolicyStore;
 use crate::poller::{PollSummary, Poller};
+use crate::queue::Queue;
 use crate::repos::Repos;
 use crate::reviews::{Review, Reviews};
 
@@ -28,6 +29,7 @@ pub(crate) struct AppState {
     pub repos: Repos,
     pub jobs: Jobs,
     pub reviews: Reviews,
+    pub queue: Queue,
     pub poller: Poller,
     pub token: String,
     pub events: EventBus,
@@ -56,6 +58,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/reviews", get(list_reviews))
         .merge(crate::policy_api::routes())
         .merge(crate::repos_api::routes())
+        .merge(crate::queue_api::routes())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .with_state(state)
 }
