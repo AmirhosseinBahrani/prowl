@@ -32,13 +32,36 @@ async fn main() -> anyhow::Result<()> {
     let client = ApiClient::new(Endpoint::for_home(&home), token);
 
     let (keys_tx, keys) = tokio::sync::mpsc::unbounded_channel();
+    // While an editor owns the terminal, stop reading keys so it gets them all.
+    let (paused_tx, mut paused) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
-        let mut events = EventStream::new();
-        while let Some(Ok(event)) = events.next().await {
-            if let Event::Key(key) = event
-                && keys_tx.send(key).is_err()
-            {
-                break;
+        loop {
+            while *paused.borrow() {
+                if paused.changed().await.is_err() {
+                    return;
+                }
+            }
+            let mut events = EventStream::new();
+            loop {
+                tokio::select! {
+                    event = events.next() => match event {
+                        Some(Ok(Event::Key(key))) => {
+                            if keys_tx.send(key).is_err() {
+                                return;
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        _ => return,
+                    },
+                    changed = paused.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                        if *paused.borrow() {
+                            break;
+                        }
+                    }
+                }
             }
         }
     });
@@ -52,6 +75,8 @@ async fn main() -> anyhow::Result<()> {
             home,
             tick: Duration::from_secs(5),
             snapshot: None,
+            editor: prowl::Editor::System,
+            input_paused: Some(paused_tx),
         },
     )
     .await;

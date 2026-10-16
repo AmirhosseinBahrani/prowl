@@ -34,6 +34,7 @@ pub(crate) struct AppState {
     pub power: Power,
     pub claude: std::sync::Arc<crate::claude::Claude>,
     pub claude_env: Vec<(String, String)>,
+    pub worker: crate::worker::Worker,
     pub queue: Queue,
     pub poller: Poller,
     pub token: String,
@@ -64,6 +65,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/power", get(power_status))
         .route("/v1/costs", get(costs))
         .route("/v1/doctor", get(doctor))
+        .route("/v1/dry-run", post(dry_run))
         .merge(crate::policy_api::routes())
         .merge(crate::repos_api::routes())
         .merge(crate::queue_api::routes())
@@ -147,6 +149,25 @@ async fn costs(State(state): State<AppState>) -> Result<Json<Costs>, ApiError> {
         daily_budget_usd: state.daily_budget_usd,
         resets_at_ms: day + 86_400_000,
     }))
+}
+
+#[derive(Deserialize)]
+struct DryRunRequest {
+    repo: String,
+    pr: u64,
+}
+
+/// Reviews a PR without publishing anything (to try out a policy change).
+async fn dry_run(
+    State(state): State<AppState>,
+    Json(req): Json<DryRunRequest>,
+) -> Result<Json<crate::worker::DryRun>, ApiError> {
+    state
+        .worker
+        .dry_run(&req.repo, req.pr)
+        .await
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")))
 }
 
 async fn doctor(State(state): State<AppState>) -> Json<crate::doctor::Doctor> {

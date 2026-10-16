@@ -6,12 +6,13 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 
-use crate::policy::{EffectivePolicy, PolicyError, PolicyVersion, Scope};
+use crate::policy::{EffectivePolicy, PolicyError, PolicySummary, PolicyVersion, Scope};
 use crate::server::{ApiError, AppState};
 
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/v1/policy", get(effective))
+        .route("/v1/policies", get(list))
         .route("/v1/policies/global", get(get_global).put(put_global))
         .route("/v1/policies/global/versions", get(global_versions))
         .route(
@@ -63,6 +64,10 @@ async fn effective(
 ) -> Result<EffectivePolicy> {
     let repo = q.repo.as_deref().map(Scope::parse_repo).transpose()?;
     Ok(Json(s.policies.effective(repo.as_ref()).await?))
+}
+
+async fn list(State(s): State<AppState>) -> Result<Vec<PolicySummary>> {
+    Ok(Json(s.policies.list().await?))
 }
 
 async fn get_scope(s: &AppState, scope: Scope) -> Result<EffectivePolicy> {

@@ -1,0 +1,2 @@
+# Keep LF everywhere so embedded files (the default policy) are byte-identical on every OS.
+* text=auto eol=lf

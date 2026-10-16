@@ -149,7 +149,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         poller.clone(),
         shutdown.clone(),
     );
-    Worker::new(WorkerParts {
+    let worker = Worker::new(WorkerParts {
         jobs: jobs.clone(),
         reviews: reviews.clone(),
         poller: poller.clone(),
@@ -175,8 +175,8 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         },
         active: active_reviews,
         concurrency: config.review_concurrency,
-    })
-    .spawn(shutdown.clone());
+    });
+    worker.spawn(shutdown.clone());
 
     let state = AppState {
         auth: auth.clone(),
@@ -188,6 +188,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         power,
         claude: std::sync::Arc::new(claude_for(&config)),
         claude_env: config.claude_env.clone(),
+        worker,
         queue,
         poller,
         token: token.clone(),

@@ -1,7 +1,12 @@
 //! TUI state and the pure `update` that turns messages into state changes and commands.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use prowld::{AuthState, Costs, Doctor, Event, PowerStatus, Repo, RepoPage, Status};
+use prowld::{
+    AuthState, Costs, Doctor, DryRun, EffectivePolicy, Event, PolicySummary, PolicyVersion,
+    PowerStatus, Repo, RepoPage, Status,
+};
+
+use crate::policy_tab::{DryRunState, PolicyTab};
 
 pub const PER_PAGE: usize = 15;
 
@@ -12,6 +17,8 @@ pub enum Screen {
     Doctor,
     Login,
     Repos,
+    /// First-run step after picking repos: look at (and optionally edit) the policy.
+    PolicySetup,
     Main,
 }
 
@@ -87,6 +94,14 @@ pub enum Msg {
     StatusBar(StatusBar),
     Event(Event),
     ServiceInstalled(Result<String, String>),
+    Policies(Result<Vec<PolicySummary>, String>),
+    Policy(Result<EffectivePolicy, String>),
+    Versions(Result<Vec<PolicyVersion>, String>),
+    /// The editor closed (or failed to start).
+    Edited(Result<(), String>),
+    /// An override was created, restored or deleted.
+    PolicyChanged(Result<String, String>),
+    DryRunDone(Result<DryRun, String>),
 }
 
 /// Work for the runtime to do; it answers with a [`Msg`].
@@ -110,6 +125,32 @@ pub enum Cmd {
     },
     LoadStatusBar,
     InstallService,
+    LoadPolicies,
+    LoadPolicy {
+        scope: String,
+    },
+    LoadVersions {
+        scope: String,
+    },
+    /// Suspend the UI and open the policy file in the user's editor.
+    EditPolicy {
+        scope: String,
+    },
+    /// Create an override (seeded from the global policy) and open it in the editor.
+    CreateOverride {
+        repo: String,
+    },
+    DeleteOverride {
+        scope: String,
+    },
+    RestorePolicy {
+        scope: String,
+        version_id: i64,
+    },
+    DryRun {
+        repo: String,
+        pr: u64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +162,7 @@ pub struct App {
     pub doctor: Option<Doctor>,
     pub auth: Option<AuthState>,
     pub repos: RepoPicker,
+    pub policy: PolicyTab,
     pub status: StatusBar,
     /// A one-line message shown above the status bar.
     pub notice: Option<String>,
@@ -140,6 +182,7 @@ impl App {
             doctor: None,
             auth: None,
             repos: RepoPicker::default(),
+            policy: PolicyTab::default(),
             status: StatusBar::default(),
             notice: None,
             help: false,
@@ -257,6 +300,45 @@ impl App {
                 self.notice = Some(format!("Could not install the service: {e}"));
                 vec![]
             }
+            Msg::Policies(Ok(list)) => self.policy.on_policies(list),
+            Msg::Policy(Ok(policy)) => {
+                if self.policy.selected_scope().as_deref() == Some(policy.scope.as_str()) {
+                    self.policy.content = Some(policy);
+                }
+                vec![]
+            }
+            Msg::Versions(Ok(versions)) => {
+                if self.policy.versions.is_some() {
+                    self.policy.version_selected = self
+                        .policy
+                        .version_selected
+                        .min(versions.len().saturating_sub(1));
+                    self.policy.versions = Some(versions);
+                }
+                vec![]
+            }
+            Msg::Edited(Ok(())) => vec![Cmd::LoadPolicies],
+            Msg::PolicyChanged(Ok(message)) => {
+                self.notice = Some(message);
+                vec![Cmd::LoadPolicies]
+            }
+            Msg::DryRunDone(result) => {
+                if let Some(DryRunState::Running { target }) = self.policy.dry_run.take() {
+                    self.policy.dry_run = Some(DryRunState::Done {
+                        target,
+                        result: Box::new(result),
+                    });
+                }
+                vec![Cmd::LoadStatusBar]
+            }
+            Msg::Policies(Err(e))
+            | Msg::Policy(Err(e))
+            | Msg::Versions(Err(e))
+            | Msg::Edited(Err(e))
+            | Msg::PolicyChanged(Err(e)) => {
+                self.notice = Some(e);
+                vec![]
+            }
         }
     }
 
@@ -275,6 +357,7 @@ impl App {
                 vec![Cmd::LoadAuth, Cmd::LoadStatusBar]
             }
             "auth.pending" => vec![Cmd::LoadAuth],
+            "policy.changed" if !self.policy.list.is_empty() => vec![Cmd::LoadPolicies],
             kind if kind.starts_with("repo.")
                 || kind.starts_with("queue.")
                 || kind.starts_with("review.")
@@ -296,6 +379,9 @@ impl App {
         }
         if self.repos.searching && self.picker_visible() {
             return self.on_search_key(key);
+        }
+        if self.screen == Screen::Main && self.tab == Tab::Policy && self.policy.captures_keys() {
+            return self.policy.on_key(key);
         }
         if self.help {
             self.help = false;
@@ -342,13 +428,23 @@ impl App {
                             Some("Watch at least one repository (space) to continue.".into());
                         return vec![];
                     }
-                    self.onboarding = false;
-                    self.screen = Screen::Main;
-                    self.tab = Tab::Queue;
-                    return vec![Cmd::LoadStatusBar];
+                    self.screen = Screen::PolicySetup;
+                    return vec![];
                 }
                 self.on_picker_key(key)
             }
+            Screen::PolicySetup => match key.code {
+                KeyCode::Char('e') => vec![Cmd::EditPolicy {
+                    scope: "global".into(),
+                }],
+                KeyCode::Enter => {
+                    self.onboarding = false;
+                    self.screen = Screen::Main;
+                    self.tab = Tab::Queue;
+                    vec![Cmd::LoadStatusBar]
+                }
+                _ => vec![],
+            },
             Screen::Main => self.on_main_key(key),
         }
     }
@@ -365,10 +461,15 @@ impl App {
             if self.tab == Tab::Repos && self.repos.page.is_none() {
                 return self.load_repos(false);
             }
+            if self.tab == Tab::Policy {
+                return vec![Cmd::LoadPolicies];
+            }
             return vec![];
         }
-        if self.tab == Tab::Repos {
-            return self.on_picker_key(key);
+        match self.tab {
+            Tab::Repos => return self.on_picker_key(key),
+            Tab::Policy => return self.policy.on_key(key),
+            _ => {}
         }
         vec![]
     }
@@ -622,6 +723,37 @@ mod tests {
             Screen::Repos,
             "no stale 'watch at least one' refusal"
         );
+    }
+
+    #[test]
+    fn onboarding_ends_with_the_policy_step() {
+        let mut app = App::new("sock");
+        app.screen = Screen::Repos;
+        app.onboarding = true;
+        app.status.watched = Some(1);
+        app.update(key(KeyCode::Enter));
+        assert_eq!(app.screen, Screen::PolicySetup);
+        assert_eq!(
+            app.update(key(KeyCode::Char('e'))),
+            [Cmd::EditPolicy {
+                scope: "global".into()
+            }]
+        );
+        app.update(key(KeyCode::Enter));
+        assert_eq!(app.screen, Screen::Main);
+    }
+
+    #[test]
+    fn typing_in_a_policy_prompt_doesnt_trigger_shortcuts() {
+        let mut app = App::new("sock");
+        app.screen = Screen::Main;
+        app.tab = Tab::Policy;
+        app.update(key(KeyCode::Char('t')));
+        app.update(key(KeyCode::Char('q')));
+        app.update(key(KeyCode::Char('1')));
+        assert!(!app.quit);
+        assert_eq!(app.tab, Tab::Policy);
+        assert_eq!(app.policy.input.as_ref().unwrap().text, "q1");
     }
 
     #[test]

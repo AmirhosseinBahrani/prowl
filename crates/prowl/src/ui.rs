@@ -36,6 +36,7 @@ pub fn draw(app: &App, frame: &mut Frame) {
             frame.render_widget(block, body);
             repo_picker(app, frame, inner, true);
         }
+        Screen::PolicySetup => policy_setup(frame, body),
         Screen::Main => main_screen(app, frame, body),
     }
     if let Some(text) = &app.notice {
@@ -171,6 +172,24 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
+fn policy_setup(frame: &mut Frame, area: Rect) {
+    let lines = vec![
+        Line::from("PRowl gives your Review Policy to Claude with every pull request it reviews."),
+        Line::from("Rules under \"ALWAYS require human review\" decide which PRs wait for you."),
+        Line::from(
+            "A starter policy is in place; adapt it to your codebase now or any time later.",
+        ),
+        Line::from(""),
+        Line::from(vec![
+            "[e] ".bold(),
+            "edit it in your editor  ".into(),
+            "[enter] ".bold(),
+            "continue".into(),
+        ]),
+    ];
+    centered(frame, area, "Your Review Policy", lines);
+}
+
 fn qr_lines(text: &str) -> Vec<Line<'static>> {
     let Ok(code) = qrcode::QrCode::new(text.as_bytes()) else {
         return vec![];
@@ -287,14 +306,14 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(block, body);
     match app.tab {
         Tab::Repos => repo_picker(app, frame, inner, false),
+        Tab::Policy => crate::policy_ui::draw(&app.policy, frame, inner),
         other => {
             let what = match other {
                 Tab::Queue => "the Human Review Queue",
                 Tab::Feed => "the live event feed",
                 Tab::History => "review history",
-                Tab::Policy => "the Review Policy",
                 Tab::Settings => "settings",
-                Tab::Repos => unreachable!(),
+                Tab::Repos | Tab::Policy => unreachable!(),
             };
             frame.render_widget(
                 Paragraph::new(Text::from(format!("  Coming soon: {what}."))).dim(),
@@ -360,6 +379,8 @@ fn help(frame: &mut Frame, area: Rect) {
         Line::from("  ↑↓ or j k         move"),
         Line::from("  /                 search (esc to finish)"),
         Line::from("  space             watch / unwatch a repository"),
+        Line::from("  Policy tab: e edit · h history · r restore · n new override"),
+        Line::from("              x delete override · t dry-run a PR · esc back"),
         Line::from("  n / p             next / previous page"),
         Line::from("  r                 refresh or retry"),
         Line::from("  ?                 this help"),

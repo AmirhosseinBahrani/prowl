@@ -106,6 +106,12 @@ async fn repo_override_wins_for_that_repo_only() {
     assert_eq!(docs.scope, "global");
 
     client.delete_policy(&repo("acme/payments")).await.unwrap();
+    // Deleting again is fine (idempotent); deleting one that never existed is not.
+    client.delete_policy(&repo("acme/payments")).await.unwrap();
+    assert_eq!(
+        status_of(client.delete_policy(&repo("acme/never")).await.unwrap_err()),
+        404
+    );
     let after = client
         .effective_policy(Some("acme/payments"))
         .await
