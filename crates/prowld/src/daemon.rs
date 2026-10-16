@@ -11,6 +11,7 @@ use crate::config::{self, Config};
 use crate::credentials::CredentialStore;
 use crate::events::{self, EventBus};
 use crate::github::GitHub;
+use crate::policy::PolicyStore;
 use crate::server::{self, AppState};
 use crate::store;
 use crate::transport::{self, Endpoint};
@@ -74,14 +75,24 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         github,
         config.github_client_id.clone(),
         credentials,
-        db,
+        db.clone(),
         events.clone(),
         shutdown.clone(),
     )
     .await?;
 
+    let policies = PolicyStore::open(&config.home, db.clone(), events.clone())
+        .await
+        .context("opening policy store")?;
+    spawn_policy_sync(
+        policies.clone(),
+        config.policy_sync_interval,
+        shutdown.clone(),
+    );
+
     let state = AppState {
         auth: auth.clone(),
+        policies,
         token: token.clone(),
         events: events.clone(),
         started: Instant::now(),
@@ -132,4 +143,25 @@ async fn serve(
         .with_graceful_shutdown(shutdown.cancelled_owned())
         .await
         .context("Local API server failed")
+}
+
+/// Picks up policy edits made in an external editor while the daemon runs.
+fn spawn_policy_sync(
+    policies: PolicyStore,
+    every: std::time::Duration,
+    shutdown: CancellationToken,
+) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(every);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {}
+                () = shutdown.cancelled() => return,
+            }
+            if let Err(e) = policies.sync_from_disk().await {
+                tracing::warn!(error = %e, "checking policy files failed");
+            }
+        }
+    });
 }

@@ -15,10 +15,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::{Auth, AuthError, AuthState};
 use crate::events::EventBus;
+use crate::policy::PolicyStore;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub auth: Auth,
+    pub policies: PolicyStore,
     pub token: String,
     pub events: EventBus,
     pub started: Instant,
@@ -41,6 +43,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/auth", get(auth_state).delete(disconnect))
         .route("/v1/auth/device", post(start_device_flow))
+        .merge(crate::policy_api::routes())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .with_state(state)
 }
@@ -92,10 +95,10 @@ async fn disconnect(State(state): State<AppState>) -> Result<Json<AuthState>, Ap
 }
 
 /// An error answered as `{"error": "..."}` with the given status.
-struct ApiError(StatusCode, String);
+pub(crate) struct ApiError(pub StatusCode, pub String);
 
 impl ApiError {
-    fn internal(e: anyhow::Error) -> Self {
+    pub(crate) fn internal(e: anyhow::Error) -> Self {
         tracing::error!(error = %format!("{e:#}"), "request failed");
         Self(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
     }
