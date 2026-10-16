@@ -47,8 +47,8 @@ pub fn draw_feed(feed: &FeedTab, frame: &mut Frame, area: Rect) {
                 .map(|s| format!("{s:<20} "))
                 .unwrap_or_else(|| " ".repeat(21));
             Line::from(vec![
-                format!(" {} ", clock(event.at_ms)).dim(),
-                Span::raw(who).bold(),
+                crate::theme::time(format!(" {} ", clock(event.at_ms))),
+                crate::theme::pr_ref(who),
                 Span::styled(text, style),
             ])
         })
@@ -69,14 +69,11 @@ pub fn draw_feed(feed: &FeedTab, frame: &mut Frame, area: Rect) {
             Span::raw(format!("{text}▏")),
             "   enter apply · esc cancel".dim(),
         ]),
-        None => Line::from(
-            format!(
-                " [space] {} · ↑↓ scroll · [f] filter · [c] clear · [p] {} polls",
-                if feed.paused { "follow" } else { "pause" },
-                if feed.show_polls { "hide" } else { "show" }
-            )
-            .dim(),
-        ),
+        None => crate::theme::hints(&format!(
+            " [space] {} · ↑↓ scroll · [f] filter · [c] clear · [p] {} polls",
+            if feed.paused { "follow" } else { "pause" },
+            if feed.show_polls { "hide" } else { "show" }
+        )),
     };
     frame.render_widget(foot, footer);
 }
@@ -118,11 +115,7 @@ pub fn draw_history(history: &HistoryTab, status: &StatusBar, frame: &mut Frame,
         frame.render_widget(Paragraph::new(text).dim(), body);
     } else {
         let rows = visible.iter().map(|r| {
-            let decision = match decision_label(r) {
-                "agent" => Span::raw("agent").green(),
-                "human" => Span::raw("human").yellow(),
-                other => Span::raw(other),
-            };
+            let decision = crate::theme::decision(decision_label(r));
             let severity = r
                 .output
                 .as_ref()
@@ -138,10 +131,10 @@ pub fn draw_history(history: &HistoryTab, status: &StatusBar, frame: &mut Frame,
                 .collect();
             Row::new(vec![
                 Line::from(crate::feed_tab::clock(r.created_at_ms)),
-                Line::from(format!("{}#{}", r.repo, r.pr_number)),
+                Line::from(crate::theme::pr_ref(format!("{}#{}", r.repo, r.pr_number))),
                 Line::from(r.title.clone()),
                 Line::from(decision),
-                Line::from(severity),
+                Line::from(crate::theme::severity_badge(&severity)),
                 Line::from(rules.join(",")),
                 Line::from(r.cost_usd.map(|c| format!("${c:.2}")).unwrap_or_default()),
                 Line::from(duration(r.duration_ms)),
@@ -154,7 +147,7 @@ pub fn draw_history(history: &HistoryTab, status: &StatusBar, frame: &mut Frame,
                 Constraint::Length(18),
                 Constraint::Min(10),
                 Constraint::Length(6),
-                Constraint::Length(9),
+                Constraint::Length(10),
                 Constraint::Length(12),
                 Constraint::Length(6),
                 Constraint::Length(6),
@@ -176,8 +169,8 @@ pub fn draw_history(history: &HistoryTab, status: &StatusBar, frame: &mut Frame,
             Span::raw(format!("{text}▏")),
             "   enter apply · esc cancel".dim(),
         ]),
-        None => Line::from(
-            " ↑↓ select · [enter] details · [o] open on GitHub · [f] filter · [c] clear".dim(),
+        None => crate::theme::hints(
+            " ↑↓ select · [enter] details · [o] open on GitHub · [f] filter · [c] clear",
         ),
     };
     frame.render_widget(foot, footer);

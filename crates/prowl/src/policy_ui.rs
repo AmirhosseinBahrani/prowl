@@ -65,11 +65,10 @@ pub fn draw(tab: &PolicyTab, frame: &mut Frame, area: Rect) {
             "[y] yes  any other key: no".into(),
         ])
     } else if tab.versions.is_some() {
-        Line::from(" ↑↓ version · [r] restore · [esc] back".dim())
+        crate::theme::hints(" ↑↓ version · [r] restore · [esc] back")
     } else {
-        Line::from(
-            " [e] edit · [h] history · [n] new override · [x] delete override · [t] dry-run a PR"
-                .dim(),
+        crate::theme::hints(
+            " [e] edit · [h] history · [n] new override · [x] delete override · [t] dry-run a PR",
         )
     };
     frame.render_widget(footer_line, footer);
@@ -87,9 +86,20 @@ fn content(tab: &PolicyTab, frame: &mut Frame, area: Rect) {
         .map(|line| {
             let is_rule = rule_ids.iter().any(|id| line.contains(&format!("[{id}]")));
             if line.starts_with('#') {
-                Line::from(line.to_owned()).bold()
+                Line::from(Span::styled(line.to_owned(), crate::theme::accent()))
             } else if is_rule {
-                Line::from(line.to_owned()).yellow()
+                // Highlight the [ID] itself; the description stays readable.
+                match (line.find('['), line.find(']')) {
+                    (Some(a), Some(b)) if b > a => Line::from(vec![
+                        Span::raw(line[..a].to_owned()),
+                        crate::theme::key(&line[a..=b]),
+                        Span::styled(
+                            line[b + 1..].to_owned(),
+                            Style::default().fg(crate::theme::WARN),
+                        ),
+                    ]),
+                    _ => Line::from(line.to_owned()).yellow(),
+                }
             } else {
                 Line::from(line.to_owned())
             }
