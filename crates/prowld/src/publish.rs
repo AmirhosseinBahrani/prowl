@@ -307,6 +307,9 @@ pub(crate) fn needs_human_body(
             let findings: Vec<&Finding> = review.findings.iter().collect();
             push_findings(&mut body, &findings);
         }
+        None if reasons.iter().any(|r| matches!(r, Reason::TooLarge { .. })) => body.push_str(
+            "PRowl did not run the agent on this pull request, so there are no automated notes.\n\n",
+        ),
         None => body.push_str(
             "The agent could not produce a usable review, so there are no automated notes.\n\n",
         ),
@@ -336,6 +339,15 @@ fn reason_line(reason: &Reason) -> String {
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_default()
+        ),
+        Reason::TooLarge {
+            changed_lines,
+            changed_files,
+            max_lines,
+            max_files,
+        } => format!(
+            "Too large for an automated review: {changed_lines} changed lines in {changed_files} files \
+             (limits: {max_lines} lines, {max_files} files)"
         ),
         Reason::RiskScore { score, threshold } => {
             format!("Risk score **{score}** (threshold {threshold})")
@@ -453,6 +465,13 @@ pub(crate) fn describe(decision: Decision, reasons: &[Reason]) -> String {
                     .unwrap_or_default()
             ),
             Reason::RiskScore { score, threshold } => format!("risk {score} ≥ {threshold}"),
+            Reason::TooLarge {
+                changed_lines,
+                changed_files,
+                ..
+            } => {
+                format!("too large for the agent ({changed_lines} lines, {changed_files} files)")
+            }
         })
         .collect::<Vec<_>>()
         .join(", ")

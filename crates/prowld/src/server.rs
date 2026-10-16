@@ -30,6 +30,7 @@ pub(crate) struct AppState {
     pub repos: Repos,
     pub jobs: Jobs,
     pub reviews: Reviews,
+    pub daily_budget_usd: Option<f64>,
     pub power: Power,
     pub queue: Queue,
     pub poller: Poller,
@@ -59,6 +60,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/reviews", get(list_reviews))
         .route("/v1/power", get(power_status))
+        .route("/v1/costs", get(costs))
         .merge(crate::policy_api::routes())
         .merge(crate::repos_api::routes())
         .merge(crate::queue_api::routes())
@@ -117,6 +119,31 @@ async fn list_reviews(
             .await
             .map_err(ApiError::internal)?,
     ))
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct Costs {
+    /// Claude spend since midnight UTC.
+    pub today_usd: f64,
+    pub reviews_today: i64,
+    pub daily_budget_usd: Option<f64>,
+    /// When "today" ends and the budget resets.
+    pub resets_at_ms: i64,
+}
+
+async fn costs(State(state): State<AppState>) -> Result<Json<Costs>, ApiError> {
+    let day = crate::worker::utc_midnight_ms(crate::events::now_ms());
+    let (today_usd, reviews_today) = state
+        .reviews
+        .spent_since(day)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(Costs {
+        today_usd,
+        reviews_today,
+        daily_budget_usd: state.daily_budget_usd,
+        resets_at_ms: day + 86_400_000,
+    }))
 }
 
 async fn power_status(State(state): State<AppState>) -> Json<PowerStatus> {

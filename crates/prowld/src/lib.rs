@@ -46,4 +46,4 @@ pub use queue::{QueueDetail, QueueItem};
 pub use repos::{Repo, RepoPage, RepoQuery};
 pub use review::ReviewOutput;
 pub use reviews::Review;
-pub use server::Status;
+pub use server::{Costs, Status};

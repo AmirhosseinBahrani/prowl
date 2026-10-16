@@ -123,6 +123,17 @@ impl Reviews {
         Ok(())
     }
 
+    /// Claude spend recorded since `since_ms`, and how many reviews it covers.
+    pub(crate) async fn spent_since(&self, since_ms: i64) -> anyhow::Result<(f64, i64)> {
+        Ok(sqlx::query_as(
+            "SELECT COALESCE(SUM(cost_usd), 0.0), COUNT(*) FROM reviews
+             WHERE created_at_ms >= ? AND cost_usd IS NOT NULL",
+        )
+        .bind(since_ms)
+        .fetch_one(&self.db)
+        .await?)
+    }
+
     pub(crate) async fn list(&self, job_id: Option<i64>) -> anyhow::Result<Vec<Review>> {
         let rows: Vec<ReviewRow> = sqlx::query_as(
             "SELECT id, job_id, policy_scope, policy_version_id, valid, output, raw_answer,

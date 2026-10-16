@@ -38,6 +38,13 @@ pub enum Reason {
         score: u8,
         threshold: u8,
     },
+    /// Too big to send to the agent; no Claude run happened.
+    TooLarge {
+        changed_lines: u64,
+        changed_files: u64,
+        max_lines: u64,
+        max_files: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

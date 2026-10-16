@@ -25,7 +25,7 @@ use crate::reviews::Reviews;
 use crate::server::{self, AppState};
 use crate::store;
 use crate::transport::{self, Endpoint};
-use crate::worker::{RetrySettings, Worker, WorkerParts};
+use crate::worker::{Limits, RetrySettings, Worker, WorkerParts};
 use crate::workspace::Workspace;
 
 /// A daemon running inside the current process.
@@ -174,6 +174,11 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
             base: config.retry_base,
             max_attempts: config.max_attempts,
         },
+        limits: Limits {
+            daily_budget_usd: config.daily_budget_usd,
+            max_changed_lines: config.max_changed_lines,
+            max_changed_files: config.max_changed_files,
+        },
         active: active_reviews,
         concurrency: config.review_concurrency,
     })
@@ -185,6 +190,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         repos,
         jobs,
         reviews,
+        daily_budget_usd: config.daily_budget_usd,
         power,
         queue,
         poller,
