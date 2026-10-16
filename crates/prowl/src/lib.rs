@@ -2,9 +2,12 @@
 //! it works the same on the desktop and over SSH on an always-on server.
 
 pub mod app;
+pub mod feed_tab;
+mod feed_ui;
+pub mod history_tab;
 pub mod policy_tab;
-mod policy_ui;
+pub(crate) mod policy_ui;
 pub mod runtime;
 pub mod ui;
 
-pub use runtime::{Editor, Options, run};
+pub use runtime::{Editor, Opener, Options, run};

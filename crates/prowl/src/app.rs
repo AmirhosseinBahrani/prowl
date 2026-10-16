@@ -6,6 +6,8 @@ use prowld::{
     PowerStatus, Repo, RepoPage, Status,
 };
 
+use crate::feed_tab::FeedTab;
+use crate::history_tab::HistoryTab;
 use crate::policy_tab::{DryRunState, PolicyTab};
 
 pub const PER_PAGE: usize = 15;
@@ -102,6 +104,9 @@ pub enum Msg {
     /// An override was created, restored or deleted.
     PolicyChanged(Result<String, String>),
     DryRunDone(Result<DryRun, String>),
+    RecentEvents(Result<Vec<Event>, String>),
+    Reviews(Result<Vec<prowld::Review>, String>),
+    Opened(Result<(), String>),
 }
 
 /// Work for the runtime to do; it answers with a [`Msg`].
@@ -151,6 +156,11 @@ pub enum Cmd {
         repo: String,
         pr: u64,
     },
+    LoadRecentEvents,
+    LoadReviews,
+    OpenUrl {
+        url: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -163,6 +173,8 @@ pub struct App {
     pub auth: Option<AuthState>,
     pub repos: RepoPicker,
     pub policy: PolicyTab,
+    pub feed: FeedTab,
+    pub history: HistoryTab,
     pub status: StatusBar,
     /// A one-line message shown above the status bar.
     pub notice: Option<String>,
@@ -183,6 +195,8 @@ impl App {
             auth: None,
             repos: RepoPicker::default(),
             policy: PolicyTab::default(),
+            feed: FeedTab::default(),
+            history: HistoryTab::default(),
             status: StatusBar::default(),
             notice: None,
             help: false,
@@ -331,6 +345,19 @@ impl App {
                 }
                 vec![Cmd::LoadStatusBar]
             }
+            Msg::RecentEvents(Ok(events)) => {
+                self.feed.on_recent(events);
+                vec![]
+            }
+            Msg::Reviews(Ok(reviews)) => {
+                self.history.on_reviews(reviews);
+                vec![]
+            }
+            Msg::Opened(Ok(())) => vec![],
+            Msg::RecentEvents(Err(e)) | Msg::Reviews(Err(e)) | Msg::Opened(Err(e)) => {
+                self.notice = Some(e);
+                vec![]
+            }
             Msg::Policies(Err(e))
             | Msg::Policy(Err(e))
             | Msg::Versions(Err(e))
@@ -349,6 +376,17 @@ impl App {
     }
 
     fn on_event(&mut self, event: &Event) -> Vec<Cmd> {
+        self.feed.push(event.clone());
+        let mut cmds = self.react_to(event);
+        if self.history.loaded
+            && matches!(event.kind.as_str(), "review.decided" | "review.published")
+        {
+            cmds.push(Cmd::LoadReviews);
+        }
+        cmds
+    }
+
+    fn react_to(&mut self, event: &Event) -> Vec<Cmd> {
         match event.kind.as_str() {
             "auth.connected" | "auth.failed" | "auth.disconnected" | "auth.reconnect_required" => {
                 if event.kind != "auth.connected" && self.screen == Screen::Main {
@@ -380,8 +418,13 @@ impl App {
         if self.repos.searching && self.picker_visible() {
             return self.on_search_key(key);
         }
-        if self.screen == Screen::Main && self.tab == Tab::Policy && self.policy.captures_keys() {
-            return self.policy.on_key(key);
+        if self.screen == Screen::Main {
+            match self.tab {
+                Tab::Policy if self.policy.captures_keys() => return self.policy.on_key(key),
+                Tab::Feed if self.feed.captures_keys() => return self.feed.on_key(key),
+                Tab::History if self.history.captures_keys() => return self.history.on_key(key),
+                _ => {}
+            }
         }
         if self.help {
             self.help = false;
@@ -461,14 +504,18 @@ impl App {
             if self.tab == Tab::Repos && self.repos.page.is_none() {
                 return self.load_repos(false);
             }
-            if self.tab == Tab::Policy {
-                return vec![Cmd::LoadPolicies];
-            }
-            return vec![];
+            return match self.tab {
+                Tab::Policy => vec![Cmd::LoadPolicies],
+                Tab::Feed if !self.feed.loaded => vec![Cmd::LoadRecentEvents],
+                Tab::History => vec![Cmd::LoadReviews],
+                _ => vec![],
+            };
         }
         match self.tab {
             Tab::Repos => return self.on_picker_key(key),
             Tab::Policy => return self.policy.on_key(key),
+            Tab::Feed => return self.feed.on_key(key),
+            Tab::History => return self.history.on_key(key),
             _ => {}
         }
         vec![]
