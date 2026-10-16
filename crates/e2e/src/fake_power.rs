@@ -1,7 +1,23 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 
-use prowld::PowerBackend;
+use prowld::{Notifier, PowerBackend};
+
+/// Records desktop notifications instead of showing them.
+#[derive(Default)]
+pub struct FakeNotifier {
+    pub sent: Mutex<Vec<(String, String)>>,
+}
+
+impl Notifier for FakeNotifier {
+    fn notify(&self, title: &str, body: &str) -> anyhow::Result<()> {
+        self.sent
+            .lock()
+            .unwrap()
+            .push((title.to_owned(), body.to_owned()));
+        Ok(())
+    }
+}
 
 /// Stand-in for the OS power APIs: tests set the power source and lid, simulate sleep by
 /// moving the wall clock forward, and check whether PRowl is keeping the machine awake.

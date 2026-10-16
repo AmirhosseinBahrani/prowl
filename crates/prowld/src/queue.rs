@@ -124,6 +124,7 @@ impl Queue {
         pr_number: u64,
         head_sha: &str,
         review_id: i64,
+        title: &str,
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO human_queue (repo, pr_number, head_sha, review_id, status, queued_at_ms)
@@ -142,7 +143,7 @@ impl Queue {
         self.events
             .emit(
                 kind::ADDED,
-                serde_json::json!({ "repo": repo, "pr": pr_number, "review_id": review_id }),
+                serde_json::json!({ "repo": repo, "pr": pr_number, "review_id": review_id, "title": title }),
             )
             .await?;
         Ok(())

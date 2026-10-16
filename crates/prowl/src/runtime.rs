@@ -184,6 +184,31 @@ fn execute(
                 Msg::RecentEvents(client.recent_events(500).await.map_err(err))
             }
             Cmd::LoadReviews => Msg::Reviews(client.reviews(None).await.map_err(err)),
+            Cmd::LoadQueue => Msg::QueueItems(client.queue().await.map_err(err)),
+            Cmd::LoadQueueItem { repo, number } => {
+                Msg::QueueDetail(client.queue_item(&repo, number).await.map_err(err))
+            }
+            Cmd::Resolve {
+                repo,
+                number,
+                action,
+                comment,
+            } => {
+                use crate::queue_tab::QueueAction;
+                let result = match action {
+                    QueueAction::Approve => client.approve(&repo, number, &comment).await,
+                    QueueAction::RequestChanges => {
+                        client.request_changes(&repo, number, &comment).await
+                    }
+                    QueueAction::Dismiss => client.dismiss(&repo, number).await,
+                };
+                Msg::Resolved {
+                    repo,
+                    number,
+                    action,
+                    result: result.map_err(err),
+                }
+            }
             Cmd::OpenUrl { url } => Msg::Opened(open_url(&opener, &url)),
             Cmd::Subscribe | Cmd::EditPolicy { .. } | Cmd::CreateOverride { .. } => {
                 unreachable!("handled by the run loop")

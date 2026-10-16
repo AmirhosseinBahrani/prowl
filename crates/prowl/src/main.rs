@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use prowld::ApiClient;
@@ -15,8 +15,37 @@ use prowld::transport::Endpoint;
 )]
 struct Cli {
     /// PRowl home of the daemon to talk to.
-    #[arg(long, env = "PROWL_HOME")]
+    #[arg(long, env = "PROWL_HOME", global = true)]
     home: Option<PathBuf>,
+
+    /// Without a command, prowl opens the terminal UI.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// List the pull requests waiting for your review.
+    Queue,
+    /// Approve a pull request on GitHub (as you) and remove it from the queue.
+    Approve {
+        /// owner/repo#number
+        pr: String,
+        #[arg(short, long, default_value = "")]
+        message: String,
+    },
+    /// Request changes on a pull request (as you) and remove it from the queue.
+    RequestChanges {
+        /// owner/repo#number
+        pr: String,
+        #[arg(short, long)]
+        message: String,
+    },
+    /// Remove a pull request from the queue without doing anything on GitHub.
+    Dismiss {
+        /// owner/repo#number
+        pr: String,
+    },
 }
 
 #[tokio::main]
@@ -31,6 +60,23 @@ async fn main() -> anyhow::Result<()> {
     let token = prowld::config::read_token(&home).unwrap_or_default();
     let client = ApiClient::new(Endpoint::for_home(&home), token);
 
+    if let Some(command) = cli.command {
+        use prowl::queue_tab::QueueAction;
+        let output = match command {
+            Command::Queue => prowl::cli::queue(&client).await?,
+            Command::Approve { pr, message } => {
+                prowl::cli::resolve(&client, &pr, QueueAction::Approve, &message).await?
+            }
+            Command::RequestChanges { pr, message } => {
+                prowl::cli::resolve(&client, &pr, QueueAction::RequestChanges, &message).await?
+            }
+            Command::Dismiss { pr } => {
+                prowl::cli::resolve(&client, &pr, QueueAction::Dismiss, "").await?
+            }
+        };
+        print!("{output}");
+        return Ok(());
+    }
     let (keys_tx, keys) = tokio::sync::mpsc::unbounded_channel();
     // While an editor owns the terminal, stop reading keys so it gets them all.
     let (paused_tx, mut paused) = tokio::sync::watch::channel(false);
