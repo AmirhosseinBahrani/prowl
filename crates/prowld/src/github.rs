@@ -1,6 +1,10 @@
 //! Thin client for the GitHub endpoints PRowl uses.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use bytes::Bytes;
 
 use reqwest::{StatusCode, header};
 use serde::Deserialize;
@@ -12,6 +16,8 @@ pub(crate) const SCOPES: &str = "repo read:org";
 pub(crate) enum GitHubError {
     #[error("GitHub rejected the token")]
     Unauthorized,
+    #[error("GitHub rate limit reached; resets at {reset_at} (unix seconds)")]
+    RateLimited { reset_at: u64 },
     #[error("GitHub returned {status}: {body}")]
     Status { status: StatusCode, body: String },
     #[error("GitHub request failed: {0}")]
@@ -23,6 +29,17 @@ pub(crate) struct GitHub {
     http: reqwest::Client,
     api_url: String,
     web_url: String,
+    /// ETag and body of the last 200 per URL, for conditional requests (a 304 is free).
+    etags: Arc<Mutex<HashMap<String, (String, Bytes)>>>,
+    rate: Arc<Mutex<RateLimit>>,
+}
+
+/// The API rate limit as last reported by GitHub.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RateLimit {
+    pub remaining: Option<u64>,
+    /// Unix seconds.
+    pub reset_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +80,56 @@ pub(crate) struct ApiOwner {
     pub login: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct SearchResults {
+    items: Vec<SearchItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SearchItem {
+    number: u64,
+    repository_url: String,
+}
+
+/// An open pull request found by the review-request search.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrRef {
+    pub repo: String,
+    pub number: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct PullRequest {
+    pub number: u64,
+    pub state: String,
+    #[serde(default)]
+    pub draft: bool,
+    pub title: String,
+    pub html_url: String,
+    pub user: ApiOwner,
+    pub head: GitRef,
+    #[serde(default)]
+    pub requested_reviewers: Vec<ApiOwner>,
+    #[serde(default)]
+    pub requested_teams: Vec<TeamRef>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct GitRef {
+    pub sha: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct TeamRef {
+    pub slug: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Team {
+    pub slug: String,
+    pub organization: ApiOwner,
+}
+
 const PER_PAGE: usize = 100;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -81,6 +148,8 @@ impl GitHub {
             http,
             api_url: api_url.trim_end_matches('/').to_owned(),
             web_url: web_url.trim_end_matches('/').to_owned(),
+            etags: Arc::default(),
+            rate: Arc::default(),
         })
     }
 
@@ -180,22 +249,163 @@ impl GitHub {
         }
     }
 
+    /// Open PRs where the account is a requested reviewer: directly, or also through a team.
+    pub(crate) async fn review_requests(
+        &self,
+        token: &str,
+        include_teams: bool,
+    ) -> Result<Vec<PrRef>, GitHubError> {
+        let qualifier = if include_teams {
+            "review-requested:@me"
+        } else {
+            "user-review-requested:@me"
+        };
+        let q = format!("is:pr is:open archived:false {qualifier}");
+        let mut found = Vec::new();
+        for page in 1..=10 {
+            let page = page.to_string();
+            let results: SearchResults = self
+                .get_json(
+                    token,
+                    "/search/issues",
+                    &[
+                        ("q", &q),
+                        ("per_page", &PER_PAGE.to_string()),
+                        ("page", &page),
+                    ],
+                )
+                .await?;
+            let last = results.items.len() < PER_PAGE;
+            found.extend(results.items.into_iter().filter_map(|item| {
+                let (_, repo) = item.repository_url.split_once("/repos/")?;
+                Some(PrRef {
+                    repo: repo.to_owned(),
+                    number: item.number,
+                })
+            }));
+            if last {
+                break;
+            }
+        }
+        Ok(found)
+    }
+
+    pub(crate) async fn pull_request(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<PullRequest, GitHubError> {
+        self.get_json(token, &format!("/repos/{repo}/pulls/{number}"), &[])
+            .await
+    }
+
+    /// Teams the account belongs to, across organisations.
+    pub(crate) async fn my_teams(&self, token: &str) -> Result<Vec<Team>, GitHubError> {
+        let mut teams = Vec::new();
+        for page in 1.. {
+            let page = page.to_string();
+            let batch: Vec<Team> = self
+                .get_json(
+                    token,
+                    "/user/teams",
+                    &[("per_page", &PER_PAGE.to_string()), ("page", &page)],
+                )
+                .await?;
+            let last = batch.len() < PER_PAGE;
+            teams.extend(batch);
+            if last {
+                break;
+            }
+        }
+        Ok(teams)
+    }
+
+    pub(crate) fn rate_limit(&self) -> RateLimit {
+        *self.rate.lock().unwrap()
+    }
+
     async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
         token: &str,
         path: &str,
         query: &[(&str, &str)],
     ) -> Result<T, GitHubError> {
-        let response = self
+        let request = self
             .http
             .get(format!("{}{path}", self.api_url))
             .query(query)
             .header(header::ACCEPT, "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .bearer_auth(token)
-            .send()
-            .await?;
-        Ok(ok(response).await?.json().await?)
+            .build()?;
+        let key = format!("{token}\n{}", request.url());
+        let cached = self.etags.lock().unwrap().get(&key).cloned();
+        let mut request = request;
+        if let Some((etag, _)) = &cached
+            && let Ok(value) = header::HeaderValue::from_str(etag)
+        {
+            request.headers_mut().insert(header::IF_NONE_MATCH, value);
+        }
+
+        let response = self.http.execute(request).await?;
+        self.record_rate_limit(&response);
+        if response.status() == StatusCode::NOT_MODIFIED
+            && let Some((_, body)) = cached
+        {
+            return serde_json::from_slice(&body).map_err(|e| GitHubError::Status {
+                status: StatusCode::NOT_MODIFIED,
+                body: format!("cached body unreadable: {e}"),
+            });
+        }
+        let response = self.check(response).await?;
+        let etag = response
+            .headers()
+            .get(header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let body = response.bytes().await?;
+        let parsed = serde_json::from_slice(&body).map_err(|e| GitHubError::Status {
+            status: StatusCode::OK,
+            body: format!("unexpected response: {e}"),
+        })?;
+        if let Some(etag) = etag {
+            self.etags.lock().unwrap().insert(key, (etag, body));
+        }
+        Ok(parsed)
+    }
+
+    fn record_rate_limit(&self, response: &reqwest::Response) {
+        let number = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+        };
+        if let Some(remaining) = number("x-ratelimit-remaining") {
+            *self.rate.lock().unwrap() = RateLimit {
+                remaining: Some(remaining),
+                reset_at: number("x-ratelimit-reset"),
+            };
+        }
+    }
+
+    /// Like [`ok`], but recognises GitHub's rate-limit responses.
+    async fn check(&self, response: reqwest::Response) -> Result<reqwest::Response, GitHubError> {
+        let status = response.status();
+        if status == StatusCode::TOO_MANY_REQUESTS
+            || (status == StatusCode::FORBIDDEN && self.rate_limit().remaining == Some(0))
+        {
+            let reset_at = self.rate_limit().reset_at.unwrap_or_else(|| {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs())
+                    + 60
+            });
+            return Err(GitHubError::RateLimited { reset_at });
+        }
+        ok(response).await
     }
 }
 

@@ -41,6 +41,8 @@ impl Harness {
         // Never touch the developer's real keychain from tests.
         config.credentials = CredentialBackend::File;
         config.policy_sync_interval = std::time::Duration::from_millis(50);
+        // Tests poll explicitly with `poll_now`; the scheduler stays out of the way.
+        config.poll_interval = std::time::Duration::from_secs(3600);
         config.claude_bin = Some(claude.bin());
         config.claude_env = claude.env();
         config

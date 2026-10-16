@@ -15,7 +15,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::{Auth, AuthError, AuthState};
 use crate::events::EventBus;
+use crate::jobs::{Job, Jobs};
 use crate::policy::PolicyStore;
+use crate::poller::{PollSummary, Poller};
 use crate::repos::Repos;
 
 #[derive(Clone)]
@@ -23,6 +25,8 @@ pub(crate) struct AppState {
     pub auth: Auth,
     pub policies: PolicyStore,
     pub repos: Repos,
+    pub jobs: Jobs,
+    pub poller: Poller,
     pub token: String,
     pub events: EventBus,
     pub started: Instant,
@@ -45,6 +49,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/events", get(events))
         .route("/v1/auth", get(auth_state).delete(disconnect))
         .route("/v1/auth/device", post(start_device_flow))
+        .route("/v1/poll", post(poll_now))
+        .route("/v1/jobs", get(list_jobs))
         .merge(crate::policy_api::routes())
         .merge(crate::repos_api::routes())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
@@ -75,6 +81,15 @@ async fn status(State(state): State<AppState>) -> Json<Status> {
         uptime_secs: state.started.elapsed().as_secs(),
         github: state.auth.state().await,
     })
+}
+
+/// Runs a poll immediately (also used by the UI's "check now").
+async fn poll_now(State(state): State<AppState>) -> Json<PollSummary> {
+    Json(state.poller.poll_once().await)
+}
+
+async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<Job>>, ApiError> {
+    Ok(Json(state.jobs.list().await.map_err(ApiError::internal)?))
 }
 
 async fn auth_state(State(state): State<AppState>) -> Json<AuthState> {

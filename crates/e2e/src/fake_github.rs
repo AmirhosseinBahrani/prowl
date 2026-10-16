@@ -16,6 +16,10 @@ pub struct RecordedRequest {
     pub body: Option<serde_json::Value>,
     /// The body as sent (e.g. a form-encoded OAuth request).
     pub raw_body: String,
+    /// Request headers, names lower-cased.
+    pub headers: HashMap<String, String>,
+    /// The status the fake answered with.
+    pub status: u16,
 }
 
 impl RecordedRequest {
@@ -34,6 +38,8 @@ struct Inner {
     routes: HashMap<(Method, String), VecDeque<(StatusCode, serde_json::Value)>>,
     /// Routes that also require a query-string fragment; checked before `routes`.
     query_routes: Vec<(Method, String, String, (StatusCode, serde_json::Value))>,
+    /// `(remaining, reset_at)` sent as X-RateLimit headers on every response.
+    rate_limit: Option<(u64, u64)>,
     requests: Vec<RecordedRequest>,
 }
 
@@ -98,6 +104,11 @@ impl FakeGitHub {
         ));
     }
 
+    /// Reports this rate limit on every response from now on.
+    pub fn set_rate_limit(&self, remaining: u64, reset_at: u64) {
+        self.inner.lock().unwrap().rate_limit = Some((remaining, reset_at));
+    }
+
     pub fn requests_to(&self, method: Method, path: &str) -> Vec<RecordedRequest> {
         self.requests()
             .into_iter()
@@ -122,44 +133,72 @@ async fn handle(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
     let query = req.uri().query().map(str::to_owned);
+    let headers: HashMap<String, String> = req
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| Some((k.as_str().to_owned(), v.to_str().ok()?.to_owned())))
+        .collect();
     let bytes: Bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
         .await
         .unwrap_or_default();
-    let body = serde_json::from_slice(&bytes).ok();
 
     let mut inner = inner.lock().unwrap();
-    inner.requests.push(RecordedRequest {
-        method: method.clone(),
-        path: path.clone(),
-        query,
-        body,
-        raw_body: String::from_utf8_lossy(&bytes).into_owned(),
-    });
-    let query = inner
-        .requests
-        .last()
-        .and_then(|r| r.query.clone())
-        .unwrap_or_default();
-    if let Some((_, _, _, (status, body))) = inner
+    let query_string = query.clone().unwrap_or_default();
+    let scripted = inner
         .query_routes
         .iter()
-        .find(|(m, p, q, _)| *m == method && *p == path && query.split('&').any(|part| part == q))
-    {
-        return (*status, axum::Json(body.clone())).into_response();
-    }
-    match inner.routes.get_mut(&(method, path)) {
-        Some(queue) => {
-            let (status, body) = if queue.len() > 1 {
+        .find(|(m, p, q, _)| {
+            *m == method && *p == path && query_string.split('&').any(|part| part == q)
+        })
+        .map(|(_, _, _, response)| response.clone())
+        .or_else(|| {
+            let queue = inner.routes.get_mut(&(method.clone(), path.clone()))?;
+            Some(if queue.len() > 1 {
                 queue.pop_front().expect("non-empty")
             } else {
                 queue[0].clone()
-            };
-            (status, axum::Json(body)).into_response()
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({ "message": "Not Found" })),
-        )
-            .into_response(),
+            })
+        });
+    let (status, body) = scripted.unwrap_or((
+        StatusCode::NOT_FOUND,
+        serde_json::json!({ "message": "Not Found" }),
+    ));
+
+    // Real GitHub sends ETags and answers a matching If-None-Match with an empty 304.
+    let etag = format!("\"{:016x}\"", fnv(body.to_string().as_bytes()));
+    let not_modified = status == StatusCode::OK && headers.get("if-none-match") == Some(&etag);
+    let status = if not_modified {
+        StatusCode::NOT_MODIFIED
+    } else {
+        status
+    };
+
+    inner.requests.push(RecordedRequest {
+        method,
+        path,
+        query,
+        body: serde_json::from_slice(&bytes).ok(),
+        raw_body: String::from_utf8_lossy(&bytes).into_owned(),
+        headers,
+        status: status.as_u16(),
+    });
+
+    let mut response = if not_modified {
+        status.into_response()
+    } else {
+        (status, axum::Json(body)).into_response()
+    };
+    let response_headers = response.headers_mut();
+    response_headers.insert("etag", etag.parse().expect("valid header"));
+    if let Some((remaining, reset_at)) = inner.rate_limit {
+        response_headers.insert("x-ratelimit-remaining", remaining.into());
+        response_headers.insert("x-ratelimit-reset", reset_at.into());
     }
+    response
+}
+
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+    })
 }

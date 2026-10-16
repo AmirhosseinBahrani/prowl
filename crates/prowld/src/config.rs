@@ -27,6 +27,11 @@ pub struct Config {
     pub credentials: CredentialBackend,
     /// How often policy files are checked for edits made outside PRowl.
     pub policy_sync_interval: Duration,
+    /// How often GitHub is checked for review requests.
+    pub poll_interval: Duration,
+    /// Count review requests made to one of the user's teams, not only direct ones.
+    pub include_team_requests: bool,
+    pub skip_drafts: bool,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -45,6 +50,9 @@ impl Config {
                 .filter(|id| !id.is_empty()),
             credentials: CredentialBackend::Auto,
             policy_sync_interval: Duration::from_secs(2),
+            poll_interval: Duration::from_secs(60),
+            include_team_requests: false,
+            skip_drafts: true,
             claude_bin: None,
             claude_env: Vec::new(),
         }
