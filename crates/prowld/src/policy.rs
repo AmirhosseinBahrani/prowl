@@ -238,7 +238,12 @@ impl PolicyStore {
         let _guard = self.lock.lock().await;
         let path = scope.path(&self.dir);
         if !path.exists() {
-            return Err(PolicyError::NotFound(scope.key()));
+            // Deleting is idempotent: an override that is already gone is fine; one that
+            // never existed is not.
+            return match self.latest_any(scope).await? {
+                Some(v) if v.source == "delete" => Ok(()),
+                _ => Err(PolicyError::NotFound(scope.key())),
+            };
         }
         std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
         self.record(scope, "", "delete").await?;
