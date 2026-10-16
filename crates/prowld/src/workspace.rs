@@ -98,28 +98,36 @@ impl Workspace {
     }
 
     /// Removes worktrees left behind by a crash.
-    pub(crate) async fn remove_all_worktrees(&self) {
+    /// Cleans up after a crash: removes leftover checkouts and review material, and the lock
+    /// files git leaves when it is killed mid-operation. Only call it when no PRowl git
+    /// process can be running (at startup).
+    pub(crate) async fn recover(&self) {
         let _ = std::fs::remove_dir_all(&self.material_dir);
-        let Ok(entries) = std::fs::read_dir(&self.worktrees_dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let _ = std::fs::remove_dir_all(entry.path());
+        if let Ok(entries) = std::fs::read_dir(&self.worktrees_dir) {
+            for entry in entries.flatten() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
         }
-        if let Ok(owners) = std::fs::read_dir(&self.repos_dir) {
-            for owner in owners.flatten() {
-                for repo in std::fs::read_dir(owner.path())
+        for repo in self.bare_repos() {
+            remove_lock_files(&repo);
+            let _ = git(&repo, &[]).args(["worktree", "prune"]).run().await;
+        }
+    }
+
+    fn bare_repos(&self) -> Vec<PathBuf> {
+        std::fs::read_dir(&self.repos_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .flat_map(|owner| {
+                std::fs::read_dir(owner.path())
                     .into_iter()
                     .flatten()
                     .flatten()
-                {
-                    let _ = git(&repo.path(), &[])
-                        .args(["worktree", "prune"])
-                        .run()
-                        .await;
-                }
-            }
-        }
+            })
+            .map(|repo| repo.path())
+            .filter(|path| path.extension().is_some_and(|e| e == "git"))
+            .collect()
     }
 
     async fn remove_locked(&self, bare: &Path, worktree: &Path) {
@@ -136,11 +144,38 @@ impl Workspace {
 
     async fn ensure_bare(&self, repo: &str) -> anyhow::Result<PathBuf> {
         let bare = self.bare_path(repo);
+        let url = format!("{}/{repo}.git", self.git_base);
         if bare.join("HEAD").exists() {
+            // Repair a clone whose remote is missing (an older interrupted setup) or stale.
+            let current = git(&bare, &[])
+                .args(["remote", "get-url", "origin"])
+                .run()
+                .await;
+            match current {
+                Ok(current) if current.trim() == url => {}
+                Ok(_) => {
+                    git(&bare, &[])
+                        .args(["remote", "set-url", "origin"])
+                        .arg(&url)
+                        .run()
+                        .await?;
+                }
+                Err(_) => {
+                    git(&bare, &[])
+                        .args(["remote", "add", "origin"])
+                        .arg(&url)
+                        .run()
+                        .await?;
+                }
+            }
             return Ok(bare);
         }
-        std::fs::create_dir_all(&bare)?;
-        Git::new(&bare, &[])
+        // Build the clone beside its final path and rename it into place, so an interrupted
+        // setup never leaves a half-configured repository behind.
+        let staging = bare.with_extension(format!("git.init-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&staging);
+        std::fs::create_dir_all(&staging)?;
+        Git::new(&staging, &[])
             .args(["init", "--bare", "--quiet", "."])
             .run()
             .await?;
@@ -149,13 +184,19 @@ impl Workspace {
             ("core.autocrlf", "false"),
             ("gc.auto", "0"),
         ] {
-            git(&bare, &[]).args(["config", key, value]).run().await?;
+            git(&staging, &[])
+                .args(["config", key, value])
+                .run()
+                .await?;
         }
-        git(&bare, &[])
+        git(&staging, &[])
             .args(["remote", "add", "origin"])
-            .arg(format!("{}/{repo}.git", self.git_base))
+            .arg(&url)
             .run()
             .await?;
+        let _ = std::fs::remove_dir_all(&bare);
+        std::fs::rename(&staging, &bare)
+            .with_context(|| format!("moving the new clone into {}", bare.display()))?;
         Ok(bare)
     }
 
@@ -221,6 +262,24 @@ fn write_new(path: &Path, contents: &str) -> anyhow::Result<()> {
         .open(path)
         .and_then(|mut f| f.write_all(contents.as_bytes()))
         .with_context(|| format!("writing {}", path.display()))
+}
+
+/// Removes `*.lock` files under a bare repository (git never uses that suffix for real refs).
+fn remove_lock_files(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(t) if t.is_dir() && !t.is_symlink() => remove_lock_files(&path),
+            Ok(t) if t.is_file() && path.extension().is_some_and(|e| e == "lock") => {
+                tracing::info!(path = %path.display(), "removing stale git lock");
+                let _ = std::fs::remove_file(&path);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// HTTPS credentials passed through git's environment, so the token never lands in a config

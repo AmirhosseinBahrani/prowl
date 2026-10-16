@@ -128,6 +128,12 @@ pub fn accept_writes(h: &Harness, n: u64) {
         json!({ "id": 700 + n, "html_url": format!("https://github.com/{REPO}/pull/{n}#issuecomment-{}", 700 + n) }),
     );
     h.github.route(
+        Method::GET,
+        &format!("/repos/{REPO}/issues/{n}/comments"),
+        StatusCode::OK,
+        json!([]),
+    );
+    h.github.route(
         Method::PATCH,
         &format!("/repos/{REPO}/issues/comments/{}", 700 + n),
         StatusCode::OK,

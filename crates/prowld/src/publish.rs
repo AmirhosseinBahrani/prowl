@@ -127,7 +127,33 @@ pub(crate) async fn publish_result(
 ) -> Result<Submitted, GitHubError> {
     match (decision, review) {
         (Decision::AgentOnly, Ok(review)) => {
-            let posted = agent_only(github, token, target, review).await?;
+            // An interrupted earlier attempt may already have posted this exact review.
+            let already = github
+                .list_reviews(token, target.repo, target.number)
+                .await?
+                .into_iter()
+                .find(|r| {
+                    r.body
+                        .as_deref()
+                        .is_some_and(|b| b.contains(&marker(target)))
+                });
+            let posted = match already {
+                Some(r) => {
+                    add_label(
+                        github,
+                        token,
+                        target.repo,
+                        target.number,
+                        LABEL_AGENT_REVIEWED,
+                    )
+                    .await?;
+                    Submitted {
+                        id: r.id,
+                        html_url: r.html_url.unwrap_or_default(),
+                    }
+                }
+                None => agent_only(github, token, target, review).await?,
+            };
             if let Some((old, _)) = prior.agent_review.take() {
                 let body = superseded_body(target, &posted.html_url);
                 ignore_missing(
@@ -151,6 +177,20 @@ pub(crate) async fn publish_result(
             Ok(posted)
         }
         _ => {
+            if prior.comment.is_none() {
+                // Our record is gone (e.g. a crash right after posting): find it by its marker.
+                let pr_marker = format!("<!-- prowl:review pr={}#{} ", target.repo, target.number);
+                prior.comment = github
+                    .list_issue_comments(token, target.repo, target.number)
+                    .await?
+                    .into_iter()
+                    .find(|c| {
+                        c.body.as_deref().is_some_and(|b| {
+                            b.contains(&pr_marker) && b.contains("Waiting for human approval")
+                        })
+                    })
+                    .map(|c| (c.id, c.html_url));
+            }
             let body = needs_human_body(target, review.ok(), reasons);
             let existing = match &prior.comment {
                 Some((id, _)) => ignore_missing(

@@ -240,8 +240,8 @@ async fn a_review_submitted_on_github_is_noticed_on_the_next_poll() {
         &format!("/repos/{REPO}/pulls/7/reviews"),
         StatusCode::OK,
         json!([
-            { "user": { "login": "someone-else" }, "state": "APPROVED", "submitted_at": "2099-01-01T00:00:00Z" },
-            { "user": { "login": "octo" }, "state": "APPROVED", "submitted_at": "2099-01-01T00:00:00Z" }
+            { "id": 1, "user": { "login": "someone-else" }, "state": "APPROVED", "submitted_at": "2099-01-01T00:00:00Z" },
+            { "id": 2, "user": { "login": "octo" }, "state": "APPROVED", "submitted_at": "2099-01-01T00:00:00Z" }
         ]),
     );
 
@@ -272,7 +272,7 @@ async fn reviews_from_before_the_pr_was_queued_dont_count() {
         Method::GET,
         &format!("/repos/{REPO}/pulls/7/reviews"),
         StatusCode::OK,
-        json!([{ "user": { "login": "octo" }, "state": "APPROVED", "submitted_at": "2001-01-01T00:00:00Z" }]),
+        json!([{ "id": 3, "user": { "login": "octo" }, "state": "APPROVED", "submitted_at": "2001-01-01T00:00:00Z" }]),
     );
 
     h.client().poll_now().await.unwrap();

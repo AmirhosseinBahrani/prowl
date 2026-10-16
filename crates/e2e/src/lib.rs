@@ -48,6 +48,7 @@ impl Harness {
         config.policy_sync_interval = std::time::Duration::from_millis(50);
         // Tests poll explicitly with `poll_now`; the scheduler stays out of the way.
         config.poll_interval = std::time::Duration::from_secs(3600);
+        config.retry_base = std::time::Duration::from_millis(20);
         config.claude_bin = Some(claude.bin());
         config.claude_env = claude.env();
         config.git_base_url = home
