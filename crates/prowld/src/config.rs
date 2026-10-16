@@ -5,11 +5,25 @@ use anyhow::{Context, anyhow};
 pub const TOKEN_FILE: &str = "api-token";
 pub const DB_FILE: &str = "prowl.db";
 
+/// Where the GitHub token is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialBackend {
+    /// The OS credential store, falling back to a private file when none is available.
+    Auto,
+    /// A file readable only by the current user, inside the PRowl home.
+    File,
+}
+
 /// Everything the daemon needs to start. All on-disk state lives under `home`.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub home: PathBuf,
     pub github_api_url: String,
+    /// Base URL for OAuth endpoints (device flow lives on github.com, not the API host).
+    pub github_web_url: String,
+    /// Client ID of the PRowl GitHub OAuth App (device flow must be enabled on it).
+    pub github_client_id: Option<String>,
+    pub credentials: CredentialBackend,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -21,6 +35,12 @@ impl Config {
         Self {
             home: home.into(),
             github_api_url: "https://api.github.com".into(),
+            github_web_url: "https://github.com".into(),
+            github_client_id: std::env::var("PROWL_GITHUB_CLIENT_ID")
+                .ok()
+                .or_else(|| option_env!("PROWL_GITHUB_CLIENT_ID").map(str::to_owned))
+                .filter(|id| !id.is_empty()),
+            credentials: CredentialBackend::Auto,
             claude_bin: None,
             claude_env: Vec::new(),
         }
@@ -60,18 +80,7 @@ pub(crate) fn ensure_token(path: &Path) -> anyhow::Result<String> {
     let bytes: [u8; 32] = rand::random();
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
 
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    use std::io::Write;
-    options
-        .open(path)
-        .and_then(|mut f| f.write_all(token.as_bytes()))
-        .with_context(|| format!("writing API token to {}", path.display()))?;
+    crate::credentials::write_private(path, &token)?;
     Ok(token)
 }
 

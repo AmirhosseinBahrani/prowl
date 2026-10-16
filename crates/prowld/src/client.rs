@@ -6,10 +6,11 @@ use bytes::Bytes;
 use futures::Stream;
 use http_body_util::{BodyExt, Empty};
 use hyper::body::Incoming;
-use hyper::{Request, Response, StatusCode, header};
+use hyper::{Method, Request, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
 use serde::de::DeserializeOwned;
 
+use crate::auth::AuthState;
 use crate::events::Event;
 use crate::server::Status;
 use crate::transport::{self, Endpoint};
@@ -59,14 +60,30 @@ impl ApiClient {
         self.get_json("/v1/status").await
     }
 
+    pub async fn auth_state(&self) -> Result<AuthState, ClientError> {
+        self.get_json("/v1/auth").await
+    }
+
+    /// Starts a GitHub device-flow login; the returned state holds the code to show the user.
+    pub async fn start_login(&self) -> Result<AuthState, ClientError> {
+        self.call_json(Method::POST, "/v1/auth/device").await
+    }
+
+    pub async fn disconnect(&self) -> Result<AuthState, ClientError> {
+        self.call_json(Method::DELETE, "/v1/auth").await
+    }
+
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
-        let (status, body) = self.get_raw(path, Some(&self.token)).await?;
-        if !status.is_success() {
-            return Err(ClientError::Status {
-                status,
-                body: String::from_utf8_lossy(&body).into_owned(),
-            });
-        }
+        self.call_json(Method::GET, path).await
+    }
+
+    async fn call_json<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+    ) -> Result<T, ClientError> {
+        let response = self.send(method, path, Some(&self.token)).await?;
+        let body = success_body(response).await?;
         Ok(serde_json::from_slice(&body)?)
     }
 
@@ -76,7 +93,7 @@ impl ApiClient {
         path: &str,
         token: Option<&str>,
     ) -> Result<(StatusCode, Bytes), ClientError> {
-        let response = self.send(path, token).await?;
+        let response = self.send(Method::GET, path, token).await?;
         let status = response.status();
         let body = response.into_body().collect().await?.to_bytes();
         Ok((status, body))
@@ -87,22 +104,17 @@ impl ApiClient {
         &self,
         since: i64,
     ) -> Result<impl Stream<Item = Result<Event, ClientError>> + Send + 'static, ClientError> {
-        let response = self
-            .send(&format!("/v1/events?since={since}"), Some(&self.token))
-            .await?;
+        let path = format!("/v1/events?since={since}");
+        let response = self.send(Method::GET, &path, Some(&self.token)).await?;
         if !response.status().is_success() {
-            let status = response.status();
-            let body = response.into_body().collect().await?.to_bytes();
-            return Err(ClientError::Status {
-                status,
-                body: String::from_utf8_lossy(&body).into_owned(),
-            });
+            return Err(success_body(response).await.unwrap_err());
         }
         Ok(sse_events(response.into_body()))
     }
 
     async fn send(
         &self,
+        method: Method,
         path: &str,
         token: Option<&str>,
     ) -> Result<Response<Incoming>, ClientError> {
@@ -117,7 +129,10 @@ impl ApiClient {
             let _ = conn.await;
         });
 
-        let mut request = Request::get(path).header(header::HOST, "prowld");
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::HOST, "prowld");
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
@@ -126,6 +141,24 @@ impl ApiClient {
             .expect("static request parts are valid");
         Ok(sender.send_request(request).await?)
     }
+}
+
+/// Collects the body of a 2xx response, or turns anything else into `ClientError::Status`,
+/// preferring the daemon's `{"error": "..."}` message.
+async fn success_body(response: Response<Incoming>) -> Result<Bytes, ClientError> {
+    let status = response.status();
+    let body = response.into_body().collect().await?.to_bytes();
+    if status.is_success() {
+        return Ok(body);
+    }
+    let message = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("error")?.as_str().map(str::to_owned))
+        .unwrap_or_else(|| String::from_utf8_lossy(&body).into_owned());
+    Err(ClientError::Status {
+        status,
+        body: message,
+    })
 }
 
 /// Parses a server-sent-events body into `Event`s, ignoring keep-alive comments.

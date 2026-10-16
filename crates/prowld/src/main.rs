@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use prowld::{ApiClient, Config};
+use prowld::{ApiClient, AuthState, Config};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -22,6 +22,10 @@ enum Command {
     Run,
     /// Ask a running daemon for its status.
     Status,
+    /// Connect a GitHub account through the running daemon (device flow).
+    Login,
+    /// Disconnect the GitHub account and delete its stored token.
+    Logout,
 }
 
 #[tokio::main]
@@ -44,6 +48,12 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&status)?);
             Ok(())
         }
+        Command::Login => login(&ApiClient::for_home(&home)?).await,
+        Command::Logout => {
+            ApiClient::for_home(&home)?.disconnect().await?;
+            println!("GitHub account disconnected.");
+            Ok(())
+        }
     }
 }
 
@@ -57,4 +67,27 @@ async fn run(config: Config) -> anyhow::Result<()> {
         }
     });
     daemon.wait().await.context("prowld stopped with an error")
+}
+
+async fn login(client: &ApiClient) -> anyhow::Result<()> {
+    if let AuthState::Pending {
+        user_code,
+        verification_uri,
+        ..
+    } = client.start_login().await?
+    {
+        println!("Open {verification_uri} and enter the code: {user_code}");
+    }
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        match client.auth_state().await? {
+            AuthState::Pending { .. } => {}
+            AuthState::Connected { login, .. } => {
+                println!("Connected as {login}.");
+                return Ok(());
+            }
+            AuthState::Failed { reason } => anyhow::bail!("GitHub login failed: {reason}"),
+            other => anyhow::bail!("GitHub login ended unexpectedly: {other:?}"),
+        }
+    }
 }

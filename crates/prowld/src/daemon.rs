@@ -5,9 +5,12 @@ use anyhow::Context;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::auth::Auth;
 use crate::client::ApiClient;
 use crate::config::{self, Config};
+use crate::credentials::CredentialStore;
 use crate::events::{self, EventBus};
+use crate::github::GitHub;
 use crate::server::{self, AppState};
 use crate::store;
 use crate::transport::{self, Endpoint};
@@ -57,7 +60,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     let db = store::open(&config.db_path())
         .await
         .context("opening database")?;
-    let events = EventBus::new(db);
+    let events = EventBus::new(db.clone());
 
     let endpoint = Endpoint::for_home(&config.home);
     let listener = transport::bind(&endpoint)
@@ -65,7 +68,20 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         .with_context(|| format!("binding Local API on {endpoint}"))?;
 
     let shutdown = CancellationToken::new();
+    let github = GitHub::new(&config.github_api_url, &config.github_web_url)?;
+    let credentials = CredentialStore::open(config.credentials, config.home.clone()).await;
+    let auth = Auth::load(
+        github,
+        config.github_client_id.clone(),
+        credentials,
+        db,
+        events.clone(),
+        shutdown.clone(),
+    )
+    .await?;
+
     let state = AppState {
+        auth: auth.clone(),
         token: token.clone(),
         events: events.clone(),
         started: Instant::now(),
@@ -90,6 +106,12 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
             serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "endpoint": endpoint.as_str() }),
         )
         .await?;
+    // Don't block startup on the network; a rejected token flips the state when GitHub answers.
+    tokio::spawn(async move {
+        if let Err(e) = auth.validate().await {
+            tracing::warn!(error = %e, "GitHub token validation failed");
+        }
+    });
     tracing::info!(%endpoint, home = %config.home.display(), "prowld ready");
 
     Ok(RunningDaemon {
