@@ -23,7 +23,7 @@ use crate::reviews::Reviews;
 use crate::server::{self, AppState};
 use crate::store;
 use crate::transport::{self, Endpoint};
-use crate::worker::{Worker, WorkerParts};
+use crate::worker::{RetrySettings, Worker, WorkerParts};
 use crate::workspace::Workspace;
 
 /// A daemon running inside the current process.
@@ -120,7 +120,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     // Anything left running by a crash or shutdown goes back in the queue, with a clean checkout.
     let interrupted = jobs.mark_interrupted().await?;
     let workspace = Workspace::new(&config.home, &config.git_base_url);
-    workspace.remove_all_worktrees().await;
+    workspace.recover().await;
     if interrupted > 0 {
         tracing::info!(
             interrupted,
@@ -148,6 +148,10 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         publications: Publications::new(db.clone()),
         decision: DecisionSettings {
             risk_threshold: config.risk_threshold,
+        },
+        retry: RetrySettings {
+            base: config.retry_base,
+            max_attempts: config.max_attempts,
         },
         concurrency: config.review_concurrency,
     })

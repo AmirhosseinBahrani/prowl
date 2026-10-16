@@ -11,7 +11,7 @@ use crate::auth::Auth;
 use crate::claude::{Claude, ClaudeError};
 use crate::decider::{self, Decision, DecisionSettings};
 use crate::events::EventBus;
-use crate::github::GitHub;
+use crate::github::{GitHub, GitHubError};
 use crate::jobs::{Job, Jobs};
 use crate::policy::{PolicyStore, Scope};
 use crate::poller::{Poller, Recheck};
@@ -36,6 +36,7 @@ pub mod kind {
     pub const CLAUDE_MISSING: &str = "claude.missing";
     pub const DECIDED: &str = "review.decided";
     pub const PUBLISHED: &str = "review.published";
+    pub const RETRYING: &str = "review.retrying";
 }
 
 #[derive(Clone)]
@@ -56,6 +57,7 @@ struct Inner {
     queue: Queue,
     publications: Publications,
     decision: DecisionSettings,
+    retry: RetrySettings,
     slots: Arc<Semaphore>,
 }
 
@@ -72,6 +74,7 @@ pub(crate) struct WorkerParts {
     pub queue: Queue,
     pub publications: Publications,
     pub decision: DecisionSettings,
+    pub retry: RetrySettings,
     pub concurrency: usize,
 }
 
@@ -92,6 +95,7 @@ impl Worker {
                 queue: parts.queue,
                 publications: parts.publications,
                 decision: parts.decision,
+                retry: parts.retry,
             }),
         }
     }
@@ -131,25 +135,44 @@ impl Worker {
     }
 
     async fn run(&self, job: &Job) {
-        if let Err(e) = self.try_run(job).await {
-            let message = format!("{e:#}");
-            tracing::warn!(job = job.id, error = %message, "review failed");
-            let _ = self
-                .inner
-                .jobs
-                .finish(job.id, "failed", Some(&message))
-                .await;
-            self.emit(kind::FAILED, job, serde_json::json!({ "error": message }))
-                .await;
+        let Err(e) = self.try_run(job).await else {
+            return;
+        };
+        let message = format!("{e:#}");
+        let attempts = u32::try_from(job.attempts).unwrap_or(u32::MAX);
+        if is_transient(&e) && attempts < self.inner.retry.max_attempts {
+            let delay = self.inner.retry.delay(attempts);
+            tracing::info!(job = job.id, attempts, ?delay, error = %message, "review will be retried");
+            let _ = self.inner.jobs.defer(job.id, delay, &message).await;
+            self.emit(
+                kind::RETRYING,
+                job,
+                serde_json::json!({
+                    "error": message,
+                    "attempt": attempts,
+                    "retry_in_ms": delay.as_millis() as u64,
+                }),
+            )
+            .await;
+            return;
         }
+        tracing::warn!(job = job.id, error = %message, "review failed");
+        let _ = self
+            .inner
+            .jobs
+            .finish(job.id, "failed", Some(&message))
+            .await;
+        self.emit(kind::FAILED, job, serde_json::json!({ "error": message }))
+            .await;
     }
 
     async fn try_run(&self, job: &Job) -> anyhow::Result<()> {
         let inner = &self.inner;
         let Some(token) = inner.auth.token().await else {
+            // Waiting for the user to reconnect isn't a failed attempt.
             inner
                 .jobs
-                .defer(job.id, DEFER, "GitHub account not connected")
+                .defer_without_attempt(job.id, DEFER, "GitHub account not connected")
                 .await?;
             return Ok(());
         };
@@ -168,11 +191,40 @@ impl Worker {
                 .await;
                 return Ok(());
             }
-            Err(e) => {
-                inner.jobs.defer(job.id, DEFER, &e.to_string()).await?;
+            Err(e) => return Err(e.into()),
+        };
+        // A previous attempt may already have reviewed (and even published) this commit.
+        if let Some(stored) = inner.reviews.list(Some(job.id)).await?.into_iter().next() {
+            if stored.published_url.is_some() {
+                inner.jobs.finish(job.id, "done", None).await?;
                 return Ok(());
             }
-        };
+            if let Some(decision) = stored.decision {
+                tracing::info!(
+                    job = job.id,
+                    "publishing the review stored by an earlier attempt"
+                );
+                let output = stored
+                    .output
+                    .as_ref()
+                    .ok_or(stored.invalid_reason.as_deref().unwrap_or("invalid output"));
+                return self
+                    .publish(
+                        job,
+                        &token,
+                        &reviewer,
+                        stored.id,
+                        &stored.policy_scope,
+                        stored.policy_version_id,
+                        decider::Verdict {
+                            decision,
+                            reasons: stored.decision_reasons.clone(),
+                        },
+                        output,
+                    )
+                    .await;
+            }
+        }
         if let Err(e) = inner.claude.locate() {
             self.emit(
                 kind::CLAUDE_MISSING,
@@ -277,21 +329,49 @@ impl Worker {
         )
         .await;
 
+        self.publish(
+            job,
+            &token,
+            &reviewer,
+            review_id,
+            &policy.scope,
+            policy.version_id,
+            verdict,
+            output.as_ref().map_err(String::as_str),
+        )
+        .await
+    }
+
+    /// Posts a decided review to GitHub and records it. Safe to repeat: posts made by an
+    /// earlier, interrupted attempt are found by their marker and reused.
+    #[allow(clippy::too_many_arguments)]
+    async fn publish(
+        &self,
+        job: &Job,
+        token: &str,
+        reviewer: &str,
+        review_id: i64,
+        policy_scope: &str,
+        policy_version_id: i64,
+        verdict: decider::Verdict,
+        output: Result<&ReviewOutput, &str>,
+    ) -> anyhow::Result<()> {
+        let inner = &self.inner;
         let target = Target {
             repo: &job.repo,
             number: job.pr_number,
             head_sha: &job.head_sha,
-            reviewer: &reviewer,
-            policy_scope: &policy.scope,
-            policy_version_id: policy.version_id,
+            reviewer,
+            policy_scope,
+            policy_version_id,
         };
         let mut prior = inner.publications.prior(&job.repo, job.pr_number).await?;
         let submitted = publish::publish_result(
             &inner.github,
-            &token,
+            token,
             &target,
             verdict.decision,
-            output.as_ref().map_err(String::as_str),
+            output,
             &verdict.reasons,
             &mut prior,
         )
@@ -410,6 +490,47 @@ impl Worker {
         }
         let _ = self.inner.events.emit(kind, payload).await;
     }
+}
+
+/// How failed reviews are retried.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RetrySettings {
+    /// Wait before the second attempt; doubles each time after.
+    pub base: Duration,
+    /// Attempts in total, including the first.
+    pub max_attempts: u32,
+}
+
+impl RetrySettings {
+    const MAX_DELAY: Duration = Duration::from_secs(30 * 60);
+
+    /// Delay after `attempts` failed attempts: base, 2×base, 4×base… capped at 30 minutes.
+    fn delay(&self, attempts: u32) -> Duration {
+        let factor = 2u32.saturating_pow(attempts.saturating_sub(1));
+        self.base.saturating_mul(factor).min(Self::MAX_DELAY)
+    }
+}
+
+/// Whether trying again later could succeed. Missing tools and requests GitHub rejects as
+/// invalid won't fix themselves; network trouble, 5xx, rate limits, timeouts and git
+/// failures might.
+fn is_transient(e: &anyhow::Error) -> bool {
+    for cause in e.chain() {
+        if let Some(e) = cause.downcast_ref::<ClaudeError>() {
+            return !matches!(e, ClaudeError::NotFound);
+        }
+        if let Some(e) = cause.downcast_ref::<GitHubError>() {
+            return match e {
+                GitHubError::Status { status, .. } => {
+                    status.is_server_error() || matches!(status.as_u16(), 408 | 409 | 429)
+                }
+                GitHubError::Unauthorized
+                | GitHubError::RateLimited { .. }
+                | GitHubError::Transport(_) => true,
+            };
+        }
+    }
+    true
 }
 
 fn parse_answer(answer: &crate::claude::ClaudeAnswer) -> Result<ReviewOutput, String> {

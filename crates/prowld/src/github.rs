@@ -176,11 +176,26 @@ pub(crate) struct Submitted {
 /// A review someone submitted on a PR.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct SubmittedReview {
+    pub id: i64,
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub html_url: Option<String>,
     pub user: Option<ApiOwner>,
     /// `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED` or `PENDING`.
     pub state: String,
     #[serde(default)]
     pub submitted_at: Option<String>,
+}
+
+/// A comment on a PR's conversation.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct IssueComment {
+    pub id: i64,
+    pub user: Option<ApiOwner>,
+    #[serde(default)]
+    pub body: Option<String>,
+    pub html_url: String,
 }
 
 /// What a person decided about a PR (submitted from the app on their explicit action).
@@ -476,6 +491,20 @@ impl GitHub {
             reqwest::Method::PUT,
             &format!("/repos/{repo}/pulls/{number}/reviews/{review_id}"),
             &serde_json::json!({ "body": body }),
+        )
+        .await
+    }
+
+    pub(crate) async fn list_issue_comments(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<IssueComment>, GitHubError> {
+        self.get_json(
+            token,
+            &format!("/repos/{repo}/issues/{number}/comments"),
+            &[("per_page", "100")],
         )
         .await
     }

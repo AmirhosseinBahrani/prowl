@@ -163,6 +163,20 @@ impl Jobs {
         Ok(())
     }
 
+    /// Like [`defer`](Self::defer), without counting the run as an attempt.
+    pub(crate) async fn defer_without_attempt(
+        &self,
+        id: i64,
+        delay: std::time::Duration,
+        reason: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE jobs SET attempts = MAX(attempts - 1, 0) WHERE id = ?")
+            .bind(id)
+            .execute(&self.db)
+            .await?;
+        self.defer(id, delay, reason).await
+    }
+
     /// Jobs left running by a crash or shutdown become runnable again.
     pub(crate) async fn mark_interrupted(&self) -> anyhow::Result<u64> {
         Ok(sqlx::query(

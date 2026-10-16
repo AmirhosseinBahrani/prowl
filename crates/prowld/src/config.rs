@@ -44,6 +44,10 @@ pub struct Config {
     pub review_budget_usd: Option<f64>,
     /// A review whose risk score reaches this needs a human.
     pub risk_threshold: u8,
+    /// Wait before retrying a failed review; doubles with each attempt (capped at 30 min).
+    pub retry_base: Duration,
+    /// Attempts per review before it is marked failed.
+    pub max_attempts: u32,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -71,6 +75,8 @@ impl Config {
             review_timeout: Duration::from_secs(15 * 60),
             review_budget_usd: None,
             risk_threshold: 60,
+            retry_base: Duration::from_secs(30),
+            max_attempts: 5,
             claude_bin: None,
             claude_env: Vec::new(),
         }
