@@ -18,6 +18,7 @@ use crate::events::EventBus;
 use crate::jobs::{Job, Jobs};
 use crate::policy::PolicyStore;
 use crate::poller::{PollSummary, Poller};
+use crate::power::{Power, PowerStatus};
 use crate::queue::Queue;
 use crate::repos::Repos;
 use crate::reviews::{Review, Reviews};
@@ -29,6 +30,7 @@ pub(crate) struct AppState {
     pub repos: Repos,
     pub jobs: Jobs,
     pub reviews: Reviews,
+    pub power: Power,
     pub queue: Queue,
     pub poller: Poller,
     pub token: String,
@@ -56,6 +58,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/poll", post(poll_now))
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/reviews", get(list_reviews))
+        .route("/v1/power", get(power_status))
         .merge(crate::policy_api::routes())
         .merge(crate::repos_api::routes())
         .merge(crate::queue_api::routes())
@@ -114,6 +117,10 @@ async fn list_reviews(
             .await
             .map_err(ApiError::internal)?,
     ))
+}
+
+async fn power_status(State(state): State<AppState>) -> Json<PowerStatus> {
+    Json(state.power.status())
 }
 
 async fn auth_state(State(state): State<AppState>) -> Json<AuthState> {

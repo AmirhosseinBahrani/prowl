@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
@@ -16,6 +17,7 @@ use crate::github::GitHub;
 use crate::jobs::Jobs;
 use crate::policy::PolicyStore;
 use crate::poller::{PollSettings, Poller};
+use crate::power::{Power, PowerSettings};
 use crate::publications::Publications;
 use crate::queue::Queue;
 use crate::repos::Repos;
@@ -128,6 +130,25 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         );
     }
     let reviews = Reviews::new(db.clone());
+    let active_reviews = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let power = Power::new(
+        config
+            .power
+            .clone()
+            .map(|hook| hook.0)
+            .unwrap_or_else(crate::power::platform_backend),
+        config.sleep_mode,
+        events.clone(),
+        active_reviews.clone(),
+    );
+    power.spawn(
+        PowerSettings {
+            check_every: config.power_check_interval,
+            wake_gap: config.wake_gap,
+        },
+        poller.clone(),
+        shutdown.clone(),
+    );
     Worker::new(WorkerParts {
         jobs: jobs.clone(),
         reviews: reviews.clone(),
@@ -153,6 +174,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
             base: config.retry_base,
             max_attempts: config.max_attempts,
         },
+        active: active_reviews,
         concurrency: config.review_concurrency,
     })
     .spawn(shutdown.clone());
@@ -163,6 +185,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         repos,
         jobs,
         reviews,
+        power,
         queue,
         poller,
         token: token.clone(),

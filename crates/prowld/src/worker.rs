@@ -58,6 +58,8 @@ struct Inner {
     publications: Publications,
     decision: DecisionSettings,
     retry: RetrySettings,
+    /// Reviews running right now, read by the power manager.
+    active: Arc<std::sync::atomic::AtomicUsize>,
     slots: Arc<Semaphore>,
 }
 
@@ -75,6 +77,7 @@ pub(crate) struct WorkerParts {
     pub publications: Publications,
     pub decision: DecisionSettings,
     pub retry: RetrySettings,
+    pub active: Arc<std::sync::atomic::AtomicUsize>,
     pub concurrency: usize,
 }
 
@@ -96,6 +99,7 @@ impl Worker {
                 publications: parts.publications,
                 decision: parts.decision,
                 retry: parts.retry,
+                active: parts.active,
             }),
         }
     }
@@ -122,11 +126,14 @@ impl Worker {
                     let this = this.clone();
                     let shutdown = shutdown.clone();
                     tokio::spawn(async move {
+                        let active = this.inner.active.clone();
+                        active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         tokio::select! {
                             () = this.run(&job) => {}
                             // Left as `running`; marked interrupted and retried on next start.
                             () = shutdown.cancelled() => {}
                         }
+                        active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                         drop(slot);
                     });
                 }
