@@ -219,6 +219,19 @@ impl App {
                 vec![]
             }
             Msg::WatchToggled(Ok(repo)) => {
+                // Count it now: finishing onboarding checks the count, and the status bar
+                // refresh that would update it arrives later.
+                let delta: isize = if repo.watched { 1 } else { -1 };
+                let was = self
+                    .repos
+                    .page
+                    .as_ref()
+                    .and_then(|p| p.repos.iter().find(|r| r.id == repo.id))
+                    .map(|r| r.watched);
+                if was != Some(repo.watched) {
+                    let count = self.status.watched.unwrap_or(0) as isize + delta;
+                    self.status.watched = Some(count.max(0) as usize);
+                }
                 if let Some(page) = &mut self.repos.page
                     && let Some(r) = page.repos.iter_mut().find(|r| r.id == repo.id)
                 {
@@ -589,6 +602,26 @@ mod tests {
             ])),
         ));
         assert_eq!(app.repos.page.unwrap().total, 1);
+    }
+
+    #[test]
+    fn watching_counts_at_once_so_onboarding_can_finish() {
+        let mut app = App::new("sock");
+        app.screen = Screen::Repos;
+        app.onboarding = true;
+        app.status.watched = Some(0);
+        app.update(Msg::Repos(
+            0,
+            Ok(page(vec![repo(1, "acme/api", false, false)])),
+        ));
+        app.update(Msg::WatchToggled(Ok(repo(1, "acme/api", true, false))));
+        assert_eq!(app.status.watched, Some(1));
+        app.update(key(KeyCode::Enter));
+        assert_ne!(
+            app.screen,
+            Screen::Repos,
+            "no stale 'watch at least one' refusal"
+        );
     }
 
     #[test]
