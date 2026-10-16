@@ -3,10 +3,12 @@
 
 mod fake_claude;
 mod fake_github;
+mod fake_power;
 mod git_remote;
 
 pub use fake_claude::{ClaudeInvocation, ClaudeResponse, FakeClaude};
 pub use fake_github::{FakeGitHub, RecordedRequest};
+pub use fake_power::FakePower;
 pub use git_remote::{GitRemote, PrCommits};
 
 use prowld::{ApiClient, Config, CredentialBackend, RunningDaemon};
@@ -18,6 +20,7 @@ pub struct Harness {
     pub github: FakeGitHub,
     pub claude: FakeClaude,
     pub git: GitRemote,
+    pub power: std::sync::Arc<FakePower>,
     daemon: Option<RunningDaemon>,
     home: TempDir,
 }
@@ -28,17 +31,24 @@ impl Harness {
         let github = FakeGitHub::start().await?;
         let claude = FakeClaude::new(home.path().join("fake-claude"))?;
         let git = GitRemote::new(home.path().join("remotes"))?;
-        let daemon = prowld::start(Self::config(home.path(), &github, &claude)).await?;
+        let power = std::sync::Arc::new(FakePower::laptop());
+        let daemon = prowld::start(Self::config(home.path(), &github, &claude, &power)).await?;
         Ok(Self {
             github,
             claude,
             git,
+            power,
             daemon: Some(daemon),
             home,
         })
     }
 
-    fn config(home: &std::path::Path, github: &FakeGitHub, claude: &FakeClaude) -> Config {
+    fn config(
+        home: &std::path::Path,
+        github: &FakeGitHub,
+        claude: &FakeClaude,
+        power: &std::sync::Arc<FakePower>,
+    ) -> Config {
         let mut config = Config::new(home.join("home"));
         config.github_api_url = github.url();
         config.github_web_url = github.url();
@@ -49,6 +59,10 @@ impl Harness {
         // Tests poll explicitly with `poll_now`; the scheduler stays out of the way.
         config.poll_interval = std::time::Duration::from_secs(3600);
         config.retry_base = std::time::Duration::from_millis(20);
+        // Never take real sleep assertions on the machine running the tests.
+        config.power = Some(prowld::PowerHook(power.clone()));
+        config.power_check_interval = std::time::Duration::from_millis(50);
+        config.wake_gap = std::time::Duration::from_secs(1);
         config.claude_bin = Some(claude.bin());
         config.claude_env = claude.env();
         config.git_base_url = home
@@ -72,7 +86,7 @@ impl Harness {
         if let Some(daemon) = self.daemon.take() {
             daemon.shutdown().await?;
         }
-        let config = Self::config(self.home.path(), &self.github, &self.claude);
+        let config = Self::config(self.home.path(), &self.github, &self.claude, &self.power);
         self.daemon = Some(prowld::start(config).await?);
         Ok(())
     }
@@ -82,7 +96,7 @@ impl Harness {
         if let Some(daemon) = self.daemon.take() {
             daemon.shutdown().await?;
         }
-        let mut config = Self::config(self.home.path(), &self.github, &self.claude);
+        let mut config = Self::config(self.home.path(), &self.github, &self.claude, &self.power);
         edit(&mut config);
         self.daemon = Some(prowld::start(config).await?);
         Ok(())

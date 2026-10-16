@@ -48,6 +48,14 @@ pub struct Config {
     pub retry_base: Duration,
     /// Attempts per review before it is marked failed.
     pub max_attempts: u32,
+    /// When to keep the machine awake; `None` picks `ac_only` with a battery, else `always`.
+    pub sleep_mode: Option<crate::power::SleepMode>,
+    /// Replaces the OS power integration (tests).
+    pub power: Option<crate::power::PowerHook>,
+    /// How often power state and sleep are checked.
+    pub power_check_interval: Duration,
+    /// A wall-clock jump this much beyond a check interval counts as the machine sleeping.
+    pub wake_gap: Duration,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -77,6 +85,10 @@ impl Config {
             risk_threshold: 60,
             retry_base: Duration::from_secs(30),
             max_attempts: 5,
+            sleep_mode: None,
+            power: None,
+            power_check_interval: Duration::from_secs(5),
+            wake_gap: Duration::from_secs(30),
             claude_bin: None,
             claude_env: Vec::new(),
         }

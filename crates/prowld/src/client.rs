@@ -15,6 +15,7 @@ use crate::events::Event;
 use crate::jobs::Job;
 use crate::policy::{EffectivePolicy, PolicyVersion, Scope};
 use crate::poller::PollSummary;
+use crate::power::PowerStatus;
 use crate::queue::{QueueDetail, QueueItem};
 use crate::repos::{Repo, RepoPage, RepoQuery};
 use crate::reviews::Review;
@@ -201,6 +202,10 @@ impl ApiClient {
     pub async fn dismiss(&self, repo: &str, number: u64) -> Result<QueueItem, ClientError> {
         self.call_json(Method::POST, &format!("/v1/queue/{repo}/{number}/dismiss"))
             .await
+    }
+
+    pub async fn power(&self) -> Result<PowerStatus, ClientError> {
+        self.get_json("/v1/power").await
     }
 
     pub async fn jobs(&self) -> Result<Vec<Job>, ClientError> {

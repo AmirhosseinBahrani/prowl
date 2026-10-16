@@ -32,4 +32,5 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
 tracing = "0.1"
 which = "8"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Power"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
