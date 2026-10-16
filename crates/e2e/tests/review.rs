@@ -47,11 +47,13 @@ async fn a_queued_pr_is_reviewed_with_the_policy_in_a_read_only_checkout() {
     .map(|t| prompt.find(t).unwrap())
     .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]));
-    assert!(prompt.contains(".prowl-review/pr.diff"));
-    // The precomputed diff and commit list were in the checkout Claude ran in.
+    // The diff and commit list live outside the checkout, in a directory Claude may read.
+    let material = call.arg_after("--add-dir").expect("--add-dir");
+    assert!(!std::path::Path::new(material).starts_with(&call.cwd));
+    assert!(prompt.contains(&format!("{material}/pr.diff")));
     assert!(
-        call.files.contains(&".prowl-review".to_owned()),
-        "{:?}",
+        !call.files.iter().any(|f| f.starts_with(".prowl")),
+        "nothing written into the checkout: {:?}",
         call.files
     );
     assert!(
@@ -309,5 +311,37 @@ async fn a_repo_override_policy_is_the_one_claude_sees() {
     let review = &h.client().reviews(Some(job.id)).await.unwrap()[0];
     assert_eq!(review.policy_scope, REPO);
     assert_eq!(review.policy_version_id, saved.version_id);
+    h.shutdown().await.unwrap();
+}
+
+/// A PR controls every file in its checkout, including symlinks. PRowl must never write
+/// through them; it writes nothing into the checkout at all.
+#[cfg(unix)]
+#[tokio::test]
+async fn symlinks_in_the_pr_cannot_redirect_prowls_writes() {
+    let (h, _) = setup(&[]).await;
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().display().to_string();
+    let commits = h
+        .git
+        .create_pr(
+            REPO,
+            9,
+            &[("README.md", "# api\n")],
+            &[
+                (".prowl-review", &format!("symlink:{target}")),
+                ("pr.diff", &format!("symlink:{target}/pwned")),
+                ("src/x.rs", "fn x() {}\n"),
+            ],
+        )
+        .unwrap();
+    serve_prs(&h, &[(9, &commits)]);
+    h.claude.respond_with(vec![ClaudeResponse::review(&valid_review())]).unwrap();
+
+    h.client().poll_now().await.unwrap();
+    wait_for_job(&h, finished("done")).await;
+
+    let written: Vec<_> = std::fs::read_dir(outside.path()).unwrap().collect();
+    assert!(written.is_empty(), "PRowl wrote through a PR symlink: {written:?}");
     h.shutdown().await.unwrap();
 }

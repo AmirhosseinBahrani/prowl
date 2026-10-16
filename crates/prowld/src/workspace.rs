@@ -1,8 +1,9 @@
 //! Git checkouts for reviews: one cached bare clone per repository, and a throwaway worktree
 //! per job at the PR's head commit. Reviews never touch the user's own working copies.
 //!
-//! Claude gets no shell, so the diff and commit list are computed here and written into the
-//! checkout under [`REVIEW_DIR`], where its read-only file tools can reach them.
+//! Claude gets no shell, so the diff and commit list are computed here and written to a
+//! directory PRowl owns, outside the checkout ([`Checkout::material`]). Nothing is ever written
+//! inside the checkout: its contents come from the PR, which could plant symlinks there.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -12,13 +13,20 @@ use anyhow::{Context, bail};
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
-/// Directory inside the checkout holding PRowl's precomputed review material.
-pub(crate) const REVIEW_DIR: &str = ".prowl-review";
+/// A PR checked out for review.
+#[derive(Debug, Clone)]
+pub(crate) struct Checkout {
+    /// The PR's files at its head commit. Untrusted: written only by git.
+    pub worktree: PathBuf,
+    /// PRowl's precomputed `pr.diff` and `commits.txt`, outside the worktree.
+    pub material: PathBuf,
+}
 
 #[derive(Clone)]
 pub(crate) struct Workspace {
     repos_dir: PathBuf,
     worktrees_dir: PathBuf,
+    material_dir: PathBuf,
     /// Base for clone URLs: `https://github.com`, or a local directory in tests.
     git_base: String,
     /// One lock per repository, so fetches and worktree changes don't collide.
@@ -31,13 +39,14 @@ impl Workspace {
             repos_dir: home.join("git"),
             // Short path: Windows tooling still trips over long ones.
             worktrees_dir: home.join("wt"),
+            material_dir: home.join("review"),
             git_base: git_base.trim_end_matches('/').to_owned(),
             locks: Arc::default(),
         }
     }
 
     /// Fetches the PR and its base branch, checks out `head_sha` in a fresh worktree, and
-    /// writes the diff against `base_sha` (merge-base form) and the commit list into it.
+    /// writes the diff against `base_sha` (merge-base form) and the commit list beside it.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn checkout(
         &self,
@@ -48,7 +57,7 @@ impl Workspace {
         base_sha: &str,
         head_sha: &str,
         token: &str,
-    ) -> anyhow::Result<PathBuf> {
+    ) -> anyhow::Result<Checkout> {
         let lock = self.lock_for(repo).await;
         let _guard = lock.lock().await;
         let bare = self.ensure_bare(repo).await?;
@@ -75,18 +84,22 @@ impl Workspace {
             .run()
             .await
             .with_context(|| format!("checking out {head_sha}"))?;
-        write_review_material(&worktree, base_sha).await?;
-        Ok(worktree)
+        let material = self.material_dir.join(job_id.to_string());
+        write_review_material(&worktree, &material, base_sha).await?;
+        Ok(Checkout { worktree, material })
     }
 
-    pub(crate) async fn remove(&self, repo: &str, worktree: &Path) {
+    pub(crate) async fn remove(&self, repo: &str, checkout: &Checkout) {
         let lock = self.lock_for(repo).await;
         let _guard = lock.lock().await;
-        self.remove_locked(&self.bare_path(repo), worktree).await;
+        self.remove_locked(&self.bare_path(repo), &checkout.worktree)
+            .await;
+        let _ = std::fs::remove_dir_all(&checkout.material);
     }
 
     /// Removes worktrees left behind by a crash.
     pub(crate) async fn remove_all_worktrees(&self) {
+        let _ = std::fs::remove_dir_all(&self.material_dir);
         let Ok(entries) = std::fs::read_dir(&self.worktrees_dir) else {
             return;
         };
@@ -161,7 +174,11 @@ impl Workspace {
     }
 }
 
-async fn write_review_material(worktree: &Path, base_sha: &str) -> anyhow::Result<()> {
+async fn write_review_material(
+    worktree: &Path,
+    material: &Path,
+    base_sha: &str,
+) -> anyhow::Result<()> {
     let range = format!("{base_sha}...HEAD");
     // No external diff drivers or text conversion: only git's own output.
     let diff = git(worktree, &[])
@@ -187,11 +204,23 @@ async fn write_review_material(worktree: &Path, base_sha: &str) -> anyhow::Resul
         .run()
         .await
         .context("listing the PR's commits")?;
-    let dir = worktree.join(REVIEW_DIR);
-    std::fs::create_dir_all(&dir)?;
-    std::fs::write(dir.join("pr.diff"), diff)?;
-    std::fs::write(dir.join("commits.txt"), commits)?;
+    // `material` is PRowl's own path (home/review/<job>), never inside the checkout.
+    let _ = std::fs::remove_dir_all(material);
+    std::fs::create_dir_all(material)?;
+    write_new(&material.join("pr.diff"), &diff)?;
+    write_new(&material.join("commits.txt"), &commits)?;
     Ok(())
+}
+
+/// Creates `path`, refusing to reuse anything already there (including a symlink).
+fn write_new(path: &Path, contents: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(contents.as_bytes()))
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// HTTPS credentials passed through git's environment, so the token never lands in a config

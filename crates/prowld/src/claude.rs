@@ -83,6 +83,7 @@ impl Claude {
     pub(crate) async fn run(
         &self,
         cwd: &Path,
+        extra_dir: &Path,
         prompt: &str,
         resume: Option<&str>,
         mut on_text: impl FnMut(&str),
@@ -102,6 +103,9 @@ impl Claude {
             .args(ALLOWED_TOOLS)
             .arg("--disallowedTools")
             .args(DISALLOWED_TOOLS)
+            // The only readable place outside the checkout: PRowl's prepared diff.
+            .arg("--add-dir")
+            .arg(extra_dir)
             .arg("--json-schema")
             .arg(crate::review::schema().to_string());
         if let Some(model) = &self.settings.model {

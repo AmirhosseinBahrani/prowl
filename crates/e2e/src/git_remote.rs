@@ -25,7 +25,8 @@ impl GitRemote {
     }
 
     /// Creates `repo` with `base_files` on `main`, then a PR `number` adding `head_files`,
-    /// published as `refs/pull/<number>/head` like GitHub does.
+    /// published as `refs/pull/<number>/head` like GitHub does. A file whose contents start
+    /// with `symlink:` is committed as a symlink to the rest of the string (Unix only).
     pub fn create_pr(
         &self,
         repo: &str,
@@ -83,6 +84,14 @@ fn write_files(dir: &Path, files: &[(&str, &str)]) -> anyhow::Result<()> {
         let path = dir.join(path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+        }
+        if let Some(target) = contents.strip_prefix("symlink:") {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &path)?;
+            #[cfg(not(unix))]
+            anyhow::bail!("symlinks in test PRs need Unix (target {target})");
+            #[cfg(unix)]
+            continue;
         }
         std::fs::write(path, contents)?;
     }

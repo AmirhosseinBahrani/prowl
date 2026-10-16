@@ -81,6 +81,26 @@ pub async fn setup(numbers: &[u64]) -> (Harness, Vec<PrCommits>) {
         );
         all.push(commits);
     }
+    let refs: Vec<(u64, &PrCommits)> = numbers.iter().copied().zip(all.iter()).collect();
+    serve_search(&h, &refs);
+    (h, all)
+}
+
+/// Serves already-created PRs (requesting octo's review) from search and detail endpoints.
+pub fn serve_prs(h: &Harness, prs: &[(u64, &PrCommits)]) {
+    for (number, commits) in prs {
+        h.github.route(
+            Method::GET,
+            &format!("/repos/{REPO}/pulls/{number}"),
+            StatusCode::OK,
+            pr_json(*number, commits, &["octo"]),
+        );
+    }
+    serve_search(h, prs);
+}
+
+fn serve_search(h: &Harness, prs: &[(u64, &PrCommits)]) {
+    let numbers: Vec<u64> = prs.iter().map(|(n, _)| *n).collect();
     let items: Vec<Value> = numbers
         .iter()
         .map(|n| json!({ "number": n, "repository_url": format!("https://api.github.com/repos/{REPO}") }))
@@ -91,7 +111,6 @@ pub async fn setup(numbers: &[u64]) -> (Harness, Vec<PrCommits>) {
         StatusCode::OK,
         json!({ "total_count": items.len(), "items": items }),
     );
-    (h, all)
 }
 
 pub async fn wait_for_job(h: &Harness, done: impl Fn(&Job) -> bool) -> Job {

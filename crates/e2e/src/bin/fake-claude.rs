@@ -32,10 +32,21 @@ fn main() {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let review_diff = std::fs::read_to_string(cwd.join(".prowl-review/pr.diff")).ok();
-    let review_commits = std::fs::read_to_string(cwd.join(".prowl-review/commits.txt")).ok();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let extra_dir = args
+        .iter()
+        .position(|a| a == "--add-dir")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
+    let read = |name: &str| {
+        extra_dir
+            .as_ref()
+            .and_then(|d| std::fs::read_to_string(d.join(name)).ok())
+    };
+    let review_diff = read("pr.diff");
+    let review_commits = read("commits.txt");
     let invocation = ClaudeInvocation {
-        args: std::env::args().skip(1).collect(),
+        args,
         stdin,
         cwd,
         files,
