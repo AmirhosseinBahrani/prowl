@@ -16,6 +16,7 @@ pub mod policy;
 mod policy_api;
 pub mod poller;
 mod prompt;
+mod publications;
 mod publish;
 pub mod queue;
 mod queue_api;

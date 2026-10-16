@@ -446,6 +446,40 @@ impl GitHub {
         .await
     }
 
+    pub(crate) async fn update_issue_comment(
+        &self,
+        token: &str,
+        repo: &str,
+        comment_id: i64,
+        body: &str,
+    ) -> Result<Submitted, GitHubError> {
+        self.send_json(
+            token,
+            reqwest::Method::PATCH,
+            &format!("/repos/{repo}/issues/comments/{comment_id}"),
+            &serde_json::json!({ "body": body }),
+        )
+        .await
+    }
+
+    /// Replaces the body of a review PRowl submitted earlier.
+    pub(crate) async fn update_review(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        review_id: i64,
+        body: &str,
+    ) -> Result<Submitted, GitHubError> {
+        self.send_json(
+            token,
+            reqwest::Method::PUT,
+            &format!("/repos/{repo}/pulls/{number}/reviews/{review_id}"),
+            &serde_json::json!({ "body": body }),
+        )
+        .await
+    }
+
     pub(crate) async fn list_reviews(
         &self,
         token: &str,
