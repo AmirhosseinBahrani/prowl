@@ -10,10 +10,11 @@ use crate::feed_tab::duration;
 use crate::policy_ui::reason_text;
 use crate::queue_tab::{QueueAction, QueueTab};
 
-pub fn draw(tab: &QueueTab, frame: &mut Frame, area: Rect) {
+/// `me` is the connected account, whose threads are PRowl's.
+pub fn draw(tab: &QueueTab, me: Option<&str>, frame: &mut Frame, area: Rect) {
     let [body, footer] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
     if let Some(detail) = &tab.detail {
-        draw_detail(tab, detail, frame, body);
+        draw_detail(tab, detail, me, frame, body);
     } else if tab.items.is_empty() {
         let text = if tab.loaded {
             "  Nothing is waiting for you. PRowl will notify you when a PR needs your review."
@@ -89,9 +90,13 @@ fn footer_line(tab: &QueueTab) -> Line<'static> {
     if let Some(error) = &tab.error {
         return Line::from(format!(" {error}")).red();
     }
-    if tab.detail.is_some() {
+    if tab.detail.is_some() && tab.show_diff {
         crate::theme::hints(
-            " [a] approve · [r] request changes · [d] dismiss · [o] open · [R] re-review · ↑↓ ] [ · [esc] back",
+            " [a] approve · [r] request changes · [d] dismiss · [v] verify · ↑↓ ] [ · [D] threads · [esc] back",
+        )
+    } else if tab.detail.is_some() {
+        crate::theme::hints(
+            " [a] approve · [r] request changes · [d] dismiss · [v] verify · [R] re-review · ↑↓ · [D] diff · [esc] back",
         )
     } else {
         crate::theme::hints(
@@ -100,7 +105,13 @@ fn footer_line(tab: &QueueTab) -> Line<'static> {
     }
 }
 
-fn draw_detail(tab: &QueueTab, detail: &prowld::QueueDetail, frame: &mut Frame, area: Rect) {
+fn draw_detail(
+    tab: &QueueTab,
+    detail: &prowld::QueueDetail,
+    me: Option<&str>,
+    frame: &mut Frame,
+    area: Rect,
+) {
     let item = &detail.item;
     let mut info = vec![
         Line::from(format!(
@@ -122,18 +133,22 @@ fn draw_detail(tab: &QueueTab, detail: &prowld::QueueDetail, frame: &mut Frame, 
     for note in &item.quick_notes {
         info.push(Line::from(format!("   - {note}")));
     }
-    for f in &item.findings {
-        let at = f.line.map(|l| format!(":{l}")).unwrap_or_default();
-        info.push(
-            Line::from(format!("   [{:?}] {}{at} {}", f.severity, f.file, f.title).to_lowercase())
-                .dim(),
-        );
-    }
     let info_height = (info.len() as u16 + 1).min(area.height / 2);
     let [top, bottom] =
         Layout::vertical([Constraint::Length(info_height), Constraint::Min(3)]).areas(area);
     frame.render_widget(Paragraph::new(info).wrap(Wrap { trim: false }), top);
 
+    if !tab.show_diff {
+        let lines = posted_lines(tab, detail, me, bottom.width);
+        let max = lines.len().saturating_sub(bottom.height as usize);
+        tab.boxes_max.set(max);
+        let scroll = tab.boxes_scroll.min(max);
+        frame.render_widget(
+            Paragraph::new(lines).scroll((scroll.min(u16::MAX as usize) as u16, 0)),
+            bottom,
+        );
+        return;
+    }
     let lines: Vec<Line> = detail
         .diff
         .lines()
@@ -172,4 +187,104 @@ fn short_reason(reason: &prowld::Reason) -> String {
         HiddenCharacters { .. } => "⚠ hidden chars".into(),
         SecretRedacted { .. } => "⚠ secret".into(),
     }
+}
+
+/// What PRowl posted on the PR, as boxes: each review thread it opened (with whether it's
+/// resolved, and the replies), then the findings that live in its comment instead.
+pub fn posted_lines(
+    tab: &QueueTab,
+    detail: &prowld::QueueDetail,
+    me: Option<&str>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    use crate::boxes::{Row as BoxRow, text_box};
+    let heading = |text: String| Line::from(Span::styled(text, crate::theme::accent()));
+    let mut lines = Vec::new();
+    let mut threaded: Vec<(String, Option<u32>)> = Vec::new();
+    match &tab.threads {
+        None => lines.push(Line::from(" Loading PRowl's threads…").dim()),
+        Some(Err(e)) => lines.push(Line::from(format!(" Couldn't load the threads: {e}")).red()),
+        Some(Ok(threads)) => {
+            let mine: Vec<&prowld::ReviewThread> = threads
+                .iter()
+                .filter(|t| {
+                    me.is_some_and(|me| t.author.eq_ignore_ascii_case(me))
+                        && t.body.contains("PRowl automated review")
+                })
+                .collect();
+            let resolved = mine.iter().filter(|t| t.resolved).count();
+            lines.push(heading(format!(
+                " ── Threads PRowl opened ({}, {resolved} resolved) ──",
+                mine.len()
+            )));
+            if mine.is_empty() {
+                lines.push(Line::from("  None on this commit.").dim());
+            }
+            for thread in mine {
+                threaded.push((thread.path.clone(), thread.line));
+                let place = match thread.line {
+                    Some(line) => format!("{}:{line}", thread.path),
+                    None => thread.path.clone(),
+                };
+                let (state, color) = match (thread.resolved, thread.outdated) {
+                    (true, _) => ("✓ resolved", crate::theme::GOOD),
+                    (false, true) => ("○ open · outdated", crate::theme::MUTED),
+                    (false, false) => ("○ open", crate::theme::WARN),
+                };
+                let mut rows: Vec<BoxRow> = readable(&thread.body)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, line)| {
+                        if i == 0 {
+                            BoxRow::bold(line)
+                        } else {
+                            BoxRow::plain(line)
+                        }
+                    })
+                    .collect();
+                for reply in thread.comments.iter().skip(1) {
+                    let text = readable(&reply.body).join(" ");
+                    rows.push(BoxRow::styled(
+                        format!("↳ @{}: {text}", reply.author),
+                        Style::default().fg(crate::theme::ACCENT),
+                    ));
+                }
+                lines.extend(text_box(&format!("{state} · {place}"), color, &rows, width));
+            }
+        }
+    }
+    // Findings with no thread of their own are in PRowl's waiting-for-approval comment.
+    let elsewhere: Vec<&prowld::review::Finding> = detail
+        .item
+        .findings
+        .iter()
+        .filter(|f| {
+            !threaded
+                .iter()
+                .any(|(path, line)| *path == f.file && *line == f.line)
+        })
+        .collect();
+    if !elsewhere.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(heading(format!(
+            " ── In PRowl's comment ({}) ──",
+            elsewhere.len()
+        )));
+        for finding in elsewhere {
+            lines.extend(crate::reviews_ui::finding_box(finding, width));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(
+        Line::from(" [D] show the diff · ↑↓ scroll · [o] open the PR to reply or resolve").dim(),
+    );
+    lines
+}
+
+/// A GitHub comment as plain lines: no PRowl footer, no Markdown emphasis.
+fn readable(body: &str) -> Vec<String> {
+    body.lines()
+        .filter(|l| !l.trim_start().starts_with("<sub>") && !l.trim().is_empty())
+        .map(|l| l.replace("**", "").trim().to_owned())
+        .collect()
 }

@@ -625,6 +625,27 @@ async fn with_a_queued_pr() -> (Harness, Tui) {
             &common::valid_review(),
         )])
         .unwrap();
+    h.github.route(
+        Method::POST,
+        "/graphql",
+        StatusCode::OK,
+        json!({ "data": { "repository": { "pullRequest": { "reviewThreads": {
+            "pageInfo": { "hasNextPage": false },
+            "nodes": [{
+                "isResolved": true, "isOutdated": false, "path": "src/a.rs", "line": 1,
+                "comments": { "nodes": [
+                    { "author": { "login": "octo" },
+                      "body": "**Low** — Unused helper\n\nNothing calls it.\n\n<sub>🤖 PRowl automated review</sub>" },
+                    { "author": { "login": "alice" }, "body": "Fixed in the next commit." }
+                ] }
+            }, {
+                "isResolved": false, "isOutdated": false, "path": "src/a.rs", "line": 1,
+                "comments": { "nodes": [
+                    { "author": { "login": "bob" }, "body": "Not PRowl's thread." }
+                ] }
+            }]
+        } } } } }),
+    );
     h.client().poll_now().await.unwrap();
     let tui = Tui::of(&h);
     tui.wait_for("1 Queue").await;
@@ -644,6 +665,16 @@ async fn the_queue_tab_shows_why_a_pr_waits_and_its_diff() {
     tui.wait_for("matched [AUTH] src/login.rs:1").await;
     tui.wait_for("Agent's summary: Adds a login rate limit.")
         .await;
+    // What PRowl posted, as boxes: its thread (resolved, with the author's reply) and the
+    // finding that lives in its comment.
+    tui.wait_for("── Threads PRowl opened (1, 1 resolved) ──")
+        .await;
+    tui.wait_for("✓ resolved · src/a.rs:1").await;
+    tui.wait_for("↳ @alice: Fixed in the next commit.").await;
+    tui.wait_for("── In PRowl's comment (1) ──").await;
+    tui.wait_for("MEDIUM · src/login.rs:1").await;
+    assert!(!tui.screen().contains("+fn a() {}"), "no diff until asked");
+    tui.press(KeyCode::Char('D'));
     tui.wait_for("+fn a() {}").await;
     tui.press(KeyCode::Char(']'));
     tui.wait_for("diff --git a/src/login_7.rs").await;

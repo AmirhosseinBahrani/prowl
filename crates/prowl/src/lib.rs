@@ -2,6 +2,7 @@
 //! it works the same on the desktop and over SSH on an always-on server.
 
 pub mod app;
+pub mod boxes;
 pub mod cli;
 pub mod feed_tab;
 mod feed_ui;

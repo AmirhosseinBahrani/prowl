@@ -131,6 +131,11 @@ pub enum Msg {
     Opened(Result<(), String>),
     QueueItems(Result<Vec<prowld::QueueItem>, String>),
     QueueDetail(Result<prowld::QueueDetail, String>),
+    Threads {
+        repo: String,
+        pr: u64,
+        result: Result<Vec<prowld::ReviewThread>, String>,
+    },
     Resolved {
         repo: String,
         number: u64,
@@ -220,6 +225,11 @@ pub enum Cmd {
         url: String,
     },
     LoadQueue,
+    /// The PR's review threads.
+    LoadThreads {
+        repo: String,
+        pr: u64,
+    },
     LoadQueueItem {
         repo: String,
         number: u64,
@@ -534,9 +544,9 @@ impl App {
                 self.queue.on_items(items);
                 vec![]
             }
-            Msg::QueueDetail(Ok(detail)) => {
-                self.queue.diff_scroll = 0;
-                self.queue.detail = Some(detail);
+            Msg::QueueDetail(Ok(detail)) => self.queue.on_detail(detail),
+            Msg::Threads { repo, pr, result } => {
+                self.queue.on_threads(&repo, pr, result);
                 vec![]
             }
             Msg::Resolved {

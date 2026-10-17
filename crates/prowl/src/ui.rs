@@ -402,7 +402,9 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
         Tab::Repos => repo_picker(app, frame, inner, false),
         Tab::Policy => crate::policy_ui::draw(&app.policy, frame, inner),
         Tab::Feed => crate::feed_ui::draw_feed(&app.feed, frame, inner),
-        Tab::Queue => crate::queue_ui::draw(&app.queue, frame, inner),
+        Tab::Queue => {
+            crate::queue_ui::draw(&app.queue, app.status.account.as_deref(), frame, inner)
+        }
         Tab::Settings => crate::settings_ui::draw(
             &app.settings,
             app.status.account.as_deref(),
@@ -550,7 +552,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
         ),
         row(
             "",
-            "R review again · v verify fixes & approve · in a PR: ↑↓ ] [ esc",
+            "R review again · v verify fixes & approve · in a PR: D threads/diff · esc",
         ),
         row(
             "2 Feed",

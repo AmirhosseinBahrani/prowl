@@ -36,6 +36,13 @@ pub struct QueueTab {
     /// The PR opened in detail view, with its diff.
     pub detail: Option<QueueDetail>,
     pub diff_scroll: usize,
+    /// The open PR's review threads, once loaded.
+    pub threads: Option<Result<Vec<prowld::ReviewThread>, String>>,
+    /// Show the diff instead of the threads and comments PRowl posted.
+    pub show_diff: bool,
+    pub boxes_scroll: usize,
+    /// The furthest `boxes_scroll` can go, as of the last draw.
+    pub boxes_max: std::cell::Cell<usize>,
     pub input: Option<CommentInput>,
     pub confirm_dismiss: bool,
     /// An action is being sent to GitHub.
@@ -149,6 +156,7 @@ impl QueueTab {
                 }
             }
             KeyCode::Esc => self.detail = None,
+            KeyCode::Char('D') if self.detail.is_some() => self.show_diff = !self.show_diff,
             KeyCode::Enter if self.detail.is_none() => {
                 if let Some(item) = self.items.get(self.selected) {
                     return vec![Cmd::LoadQueueItem {
@@ -157,7 +165,8 @@ impl QueueTab {
                     }];
                 }
             }
-            _ if self.detail.is_some() => self.scroll_diff(key.code),
+            _ if self.detail.is_some() && self.show_diff => self.scroll_diff(key.code),
+            _ if self.detail.is_some() => self.scroll_boxes(key.code),
             KeyCode::Down | KeyCode::Char('j') if self.selected + 1 < self.items.len() => {
                 self.selected += 1
             }
@@ -165,6 +174,49 @@ impl QueueTab {
             _ => {}
         }
         vec![]
+    }
+
+    /// Opens a PR's detail view on the threads and comments PRowl posted.
+    pub fn on_detail(&mut self, detail: QueueDetail) -> Vec<Cmd> {
+        let cmd = Cmd::LoadThreads {
+            repo: detail.item.repo.clone(),
+            pr: detail.item.pr_number,
+        };
+        self.diff_scroll = 0;
+        self.boxes_scroll = 0;
+        self.show_diff = false;
+        self.threads = None;
+        self.detail = Some(detail);
+        vec![cmd]
+    }
+
+    pub fn on_threads(
+        &mut self,
+        repo: &str,
+        pr: u64,
+        threads: Result<Vec<prowld::ReviewThread>, String>,
+    ) {
+        if self
+            .detail
+            .as_ref()
+            .is_some_and(|d| d.item.repo == repo && d.item.pr_number == pr)
+        {
+            self.threads = Some(threads);
+        }
+    }
+
+    fn scroll_boxes(&mut self, code: KeyCode) {
+        let max = self.boxes_max.get();
+        self.boxes_scroll = match code {
+            KeyCode::Down | KeyCode::Char('j') => self.boxes_scroll + 1,
+            KeyCode::Up | KeyCode::Char('k') => self.boxes_scroll.saturating_sub(1),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.boxes_scroll + 20,
+            KeyCode::PageUp => self.boxes_scroll.saturating_sub(20),
+            KeyCode::Home | KeyCode::Char('g') => 0,
+            KeyCode::End | KeyCode::Char('G') => max,
+            _ => self.boxes_scroll,
+        }
+        .min(max);
     }
 
     fn scroll_diff(&mut self, code: KeyCode) {
@@ -306,9 +358,28 @@ mod tests {
             item: item(7),
             diff: diff.into(),
         });
+        tab.on_key(key(KeyCode::Char('D')));
         tab.on_key(key(KeyCode::Char(']')));
         assert_eq!(tab.diff_scroll, 3);
         tab.on_key(key(KeyCode::Char('[')));
         assert_eq!(tab.diff_scroll, 0);
+    }
+
+    #[test]
+    fn opening_a_pr_shows_what_prowl_posted_and_loads_its_threads() {
+        let mut tab = QueueTab::default();
+        let cmds = tab.on_detail(QueueDetail {
+            item: item(7),
+            diff: String::new(),
+        });
+        assert!(matches!(&cmds[..], [Cmd::LoadThreads { pr: 7, .. }]));
+        assert!(!tab.show_diff);
+        let repo = tab.detail.as_ref().unwrap().item.repo.clone();
+        tab.on_threads("other/repo", 7, Ok(vec![]));
+        assert!(tab.threads.is_none(), "answers for another PR are ignored");
+        tab.on_threads(&repo, 7, Ok(vec![]));
+        assert!(matches!(tab.threads, Some(Ok(_))));
+        tab.on_key(key(KeyCode::Char('D')));
+        assert!(tab.show_diff);
     }
 }
