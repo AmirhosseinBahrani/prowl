@@ -19,11 +19,6 @@ All notable changes to PRowl are documented here. The format is based on
   transcripts and serves them at `GET /v1/jobs/{id}/transcript`; the Feed also shows each file
   Claude reads. History, Policy, Repos and Settings move to `4`–`7`.
 
-### Changed
-
-- PRowl no longer adds the `prowl:agent-reviewed` label; it still removes it from PRs labelled by
-  earlier versions when they're escalated to a human.
-
 ### Fixed
 
 - PRowl no longer pauses with "GitHub rate limit nearly used up" after ordinary polls. GitHub's
