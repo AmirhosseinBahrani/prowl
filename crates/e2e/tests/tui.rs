@@ -314,7 +314,7 @@ async fn a_set_up_install_opens_straight_on_the_main_screen() {
     tui.press(KeyCode::Char('6'));
     tui.wait_for("[x] acme/api").await;
     tui.press(KeyCode::Char('?'));
-    tui.wait_for("watch / unwatch a repository").await;
+    tui.wait_for("search · watch / unwatch").await;
     tui.press(KeyCode::Char('x'));
     tui.quit().await;
     h.shutdown().await.unwrap();

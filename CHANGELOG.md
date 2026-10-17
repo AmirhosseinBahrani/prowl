@@ -6,6 +6,11 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- The help screen (`?`) no longer cuts off or scrambles lines: it's laid out in two aligned
+  columns with a section per tab, sized to fit, with the update command at the bottom.
+
 ## [0.1.2] - 2026-10-17
 
 ### Added
