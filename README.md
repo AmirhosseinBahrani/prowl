@@ -41,8 +41,10 @@ from a terminal UI that is just as happy over SSH.
   is checked out locally and never leaves your machine except as Claude's normal API traffic.
 - **Safe with untrusted code.** Claude only gets read-only file tools in a sandboxed session — no
   shell, no network, no settings or hooks from the PR's repository. PRowl never runs PR code.
-- **Never rubber-stamps.** The agent posts comment reviews, never approvals. Approving is always
-  your explicit action.
+- **Approves only what you allow.** By default the agent posts comment reviews and approving is
+  your explicit action. Turn on *agent verdicts* and it approves (or requests changes on)
+  low-risk PRs your policy leaves to it — never one that needs a human, and it withdraws its
+  approval if a later commit does.
 - **Built to run unattended.** Retries, crash recovery, exactly-once posting, keep-awake handling,
   catch-up after sleep, a daily budget, and desktop notifications when something needs you.
 
@@ -54,7 +56,7 @@ flowchart LR
     P -- queued --> W[Worker]
     W -- "checkout + diff" --> C["claude -p<br/>read-only, restricted"]
     C -- "review JSON" --> D{Decider<br/>+ your policy}
-    D -- "agent is enough" --> R[Comment review + label]
+    D -- "agent is enough" --> R[Comment review<br/>or approve / request changes]
     D -- "needs a human" --> Q[Waiting-for-approval comment<br/>+ your Human Review Queue]
     R --> GH
     Q --> GH
@@ -66,7 +68,8 @@ flowchart LR
    and the surrounding code, guided by your Review Policy, and answers with structured findings.
 3. **Decide** — any matched policy rule, high severity, high risk score, file rule or oversized
    diff means a human must review. Signals can only escalate, never downgrade.
-4. **Publish** — agent-only results are posted as a comment review with inline notes; anything
+4. **Publish** — agent-only results are posted as a review with inline notes (a comment, or
+   with agent verdicts on, an approval or change request as Claude recommends); anything
    else gets a "⏳ Waiting for human approval" comment explaining why, and lands in your queue.
 
 ## Quick start

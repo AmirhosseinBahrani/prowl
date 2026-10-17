@@ -48,14 +48,12 @@ async fn a_review_already_posted_by_an_interrupted_attempt_is_not_posted_again()
     h.claude
         .respond_with(vec![ClaudeResponse::review(&calm_review())])
         .unwrap();
-    // The review gets posted, then labelling fails: as if PRowl died right after posting.
+    // GitHub takes the review but the answer never arrives: as if PRowl died right after
+    // posting. The retry finds the review by its marker.
     h.github.route_seq(
         Method::POST,
-        "/repos/acme/api/issues/7/labels",
-        vec![
-            (StatusCode::INTERNAL_SERVER_ERROR, json!({})),
-            (StatusCode::OK, json!([])),
-        ],
+        REVIEWS,
+        vec![(StatusCode::INTERNAL_SERVER_ERROR, json!({}))],
     );
     let marker = format!(
         "<!-- prowl:review pr=acme/api#7 sha={} -->",

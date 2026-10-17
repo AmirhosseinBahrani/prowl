@@ -10,4 +10,4 @@
 
 - [ ] `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass
 - [ ] Docs and `CHANGELOG.md` updated if users will notice
-- [ ] Keeps the [ground rules](../CONTRIBUTING.md#ground-rules-prowl-keeps) (no shell/write/network for Claude, never runs PR code, escalation only, never approves)
+- [ ] Keeps the [ground rules](../CONTRIBUTING.md#ground-rules-prowl-keeps) (no shell/write/network for Claude, never runs PR code, escalation only, approves only with agent verdicts on)

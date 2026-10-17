@@ -42,6 +42,9 @@ pub struct Settings {
     pub skip_drafts: bool,
     pub include_team_requests: bool,
     pub notifications: bool,
+    /// Approve or request changes on PRs that don't need a human, as Claude recommends.
+    #[serde(default)]
+    pub agent_verdicts: bool,
     /// Per repository (`owner/repo`), glob patterns of files that always need a human.
     pub file_rules: BTreeMap<String, Vec<String>>,
 }
@@ -63,6 +66,7 @@ impl Settings {
             skip_drafts: config.skip_drafts,
             include_team_requests: config.include_team_requests,
             notifications: config.notifications,
+            agent_verdicts: config.agent_verdicts,
             file_rules: BTreeMap::new(),
         }
     }

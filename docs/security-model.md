@@ -31,8 +31,12 @@ the allowed directories.
 - **Claude's answer can only escalate.** Policy matches, severity, risk score, size limits and
   file rules are combined so that any one of them sends the PR to a human; nothing in the answer
   can override a file rule or size limit.
-- **The agent never approves.** Agent-only results are posted as comment reviews. Approval is
-  always an explicit human action.
+- **The agent approves only when you let it.** By default agent-only results are comment reviews
+  and approval is an explicit human action. With *agent verdicts* on, the agent may approve or
+  request changes — but only on PRs every signal leaves to it (no policy rule, file rule, size
+  limit, high severity or risk). If a later commit needs a human, PRowl dismisses its earlier
+  approval (this needs write access; otherwise it marks it superseded). Consider branch
+  protection that requires a human approval for code that matters.
 - **Own comments only.** When updating an earlier PRowl comment, PRowl only adopts comments that
   carry its marker *and* were written by your account.
 

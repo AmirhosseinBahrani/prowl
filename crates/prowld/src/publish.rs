@@ -7,6 +7,7 @@ use crate::github::{GitHub, GitHubError, InlineComment, NewReview, Submitted};
 use crate::publications::Prior;
 use crate::review::{Finding, ReviewOutput};
 
+/// No longer added; still removed from PRs that earlier versions labelled.
 pub const LABEL_AGENT_REVIEWED: &str = "prowl:agent-reviewed";
 pub const LABEL_NEEDS_HUMAN: &str = "prowl:needs-human";
 pub const LABEL_HUMAN_APPROVED: &str = "prowl:human-approved";
@@ -49,6 +50,19 @@ pub(crate) struct Target<'a> {
     pub reviewer: &'a str,
     pub policy_scope: &'a str,
     pub policy_version_id: i64,
+    /// Post Claude's recommendation as the verdict of agent-only reviews.
+    pub agent_verdicts: bool,
+}
+
+/// The review event for an agent-only review: Claude's recommendation when agent verdicts are
+/// on, otherwise always a plain comment.
+pub(crate) fn agent_event(target: &Target<'_>, review: &ReviewOutput) -> &'static str {
+    use crate::review::Recommendation;
+    match (target.agent_verdicts, review.recommendation) {
+        (true, Recommendation::Approve) => "APPROVE",
+        (true, Recommendation::RequestChanges) => "REQUEST_CHANGES",
+        _ => "COMMENT",
+    }
 }
 
 pub(crate) fn marker(target: &Target<'_>) -> String {
@@ -58,8 +72,8 @@ pub(crate) fn marker(target: &Target<'_>) -> String {
     )
 }
 
-/// Submits an AGENT_ONLY review: a COMMENT review (never an approval) with inline notes on
-/// diff lines, then labels the PR.
+/// Submits an AGENT_ONLY review with inline notes on diff lines. It is a COMMENT review unless
+/// agent verdicts are on (see [`agent_event`]).
 pub(crate) async fn agent_only(
     github: &GitHub,
     token: &str,
@@ -94,19 +108,11 @@ pub(crate) async fn agent_only(
             &NewReview {
                 commit_id: target.head_sha,
                 body: &body,
-                event: "COMMENT",
+                event: agent_event(target, review),
                 comments,
             },
         )
         .await?;
-    add_label(
-        github,
-        token,
-        target.repo,
-        target.number,
-        LABEL_AGENT_REVIEWED,
-    )
-    .await?;
     Ok(submitted)
 }
 
@@ -127,33 +133,25 @@ pub(crate) async fn publish_result(
 ) -> Result<Submitted, GitHubError> {
     match (decision, review) {
         (Decision::AgentOnly, Ok(review)) => {
-            // An interrupted earlier attempt may already have posted this exact review.
-            let already = github
+            let existing = github
                 .list_reviews(token, target.repo, target.number)
-                .await?
-                .into_iter()
+                .await?;
+            // An interrupted earlier attempt may already have posted this exact review.
+            let already = existing
+                .iter()
                 .find(|r| {
                     // Anyone can paste a marker into a review; only ours count.
                     authored_by(r.user.as_ref(), target.reviewer)
                         && r.body
                             .as_deref()
                             .is_some_and(|b| b.contains(&marker(target)))
-                });
+                })
+                .cloned();
             let posted = match already {
-                Some(r) => {
-                    add_label(
-                        github,
-                        token,
-                        target.repo,
-                        target.number,
-                        LABEL_AGENT_REVIEWED,
-                    )
-                    .await?;
-                    Submitted {
-                        id: r.id,
-                        html_url: r.html_url.unwrap_or_default(),
-                    }
-                }
+                Some(r) => Submitted {
+                    id: r.id,
+                    html_url: r.html_url.unwrap_or_default(),
+                },
                 None => agent_only(github, token, target, review).await?,
             };
             if let Some((old, _)) = prior.agent_review.take() {
@@ -163,6 +161,7 @@ pub(crate) async fn publish_result(
                         .update_review(token, target.repo, target.number, old, &body)
                         .await,
                 )?;
+                withdraw_verdict(github, token, target, &existing, old, &posted.html_url).await?;
             }
             if let Some((comment, _)) = &prior.comment {
                 let body = resolved_body(target, &posted.html_url);
@@ -220,6 +219,11 @@ pub(crate) async fn publish_result(
                         .update_review(token, target.repo, target.number, old, &body)
                         .await,
                 )?;
+                // An earlier agent approval must not outlive a result that needs a human.
+                let existing = github
+                    .list_reviews(token, target.repo, target.number)
+                    .await?;
+                withdraw_verdict(github, token, target, &existing, old, &comment.html_url).await?;
                 github
                     .remove_label(token, target.repo, target.number, LABEL_AGENT_REVIEWED)
                     .await?;
@@ -227,6 +231,45 @@ pub(crate) async fn publish_result(
             prior.comment = Some((comment.id, comment.html_url.clone()));
             Ok(comment)
         }
+    }
+}
+
+/// Dismisses PRowl's earlier agent review `old` if it approved or requested changes, so a stale
+/// verdict doesn't keep counting. Needs write access; without it the verdict stays, marked
+/// superseded, and a warning is logged.
+async fn withdraw_verdict(
+    github: &GitHub,
+    token: &str,
+    target: &Target<'_>,
+    reviews: &[crate::github::SubmittedReview],
+    old: i64,
+    replaced_by: &str,
+) -> Result<(), GitHubError> {
+    let Some(review) = reviews.iter().find(|r| r.id == old) else {
+        return Ok(());
+    };
+    if !authored_by(review.user.as_ref(), target.reviewer)
+        || !matches!(review.state.as_str(), "APPROVED" | "CHANGES_REQUESTED")
+    {
+        return Ok(());
+    }
+    let message = format!("Superseded by PRowl's review of a newer commit: {replaced_by}");
+    match github
+        .dismiss_review(token, target.repo, target.number, old, &message)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(GitHubError::Status { status, body }) => {
+            tracing::warn!(
+                repo = target.repo,
+                pr = target.number,
+                %status,
+                body,
+                "could not dismiss PRowl's earlier verdict"
+            );
+            Ok(())
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -371,9 +414,14 @@ pub(crate) fn agent_only_body(
     ));
     body.push_str(&format!("{}\n\n", review.summary.trim()));
     body.push_str(&format!(
-        "**Severity:** {} · **Risk:** {}/100 · **Decision:** no human review required by policy\n\n",
+        "**Severity:** {} · **Risk:** {}/100 · **Decision:** no human review required by policy{}\n\n",
         severity_word(review),
-        review.risk_score
+        review.risk_score,
+        match agent_event(target, review) {
+            "APPROVE" => " · **Verdict:** approved by the agent",
+            "REQUEST_CHANGES" => " · **Verdict:** changes requested by the agent",
+            _ => "",
+        }
     ));
     if !review.quick_notes.is_empty() {
         body.push_str("**Quick notes**\n");

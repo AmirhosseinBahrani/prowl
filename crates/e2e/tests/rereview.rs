@@ -196,3 +196,78 @@ async fn a_deleted_comment_is_posted_again() {
     assert_eq!(h.github.requests_to(Method::POST, COMMENT).len(), 2);
     h.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn an_agent_approval_is_withdrawn_when_a_newer_commit_needs_a_human() {
+    let (mut h, _) = setup(&[7]).await;
+    h.restart_with(|c| c.agent_verdicts = true).await.unwrap();
+    let mut approve = calm_review();
+    approve["recommendation"] = "approve".into();
+    h.claude
+        .respond_with(vec![
+            ClaudeResponse::review(&approve),
+            ClaudeResponse::review(&valid_review()),
+        ])
+        .unwrap();
+    h.client().poll_now().await.unwrap();
+    wait_for_reviews(&h, 7, 1).await;
+    // GitHub now lists PRowl's approval.
+    h.github.route(
+        Method::GET,
+        REVIEWS,
+        StatusCode::OK,
+        json!([{ "id": 907, "state": "APPROVED", "user": { "login": "octo" }, "body": "earlier" }]),
+    );
+    h.github.route(
+        Method::PUT,
+        "/repos/acme/api/pulls/7/reviews/907/dismissals",
+        StatusCode::OK,
+        json!({ "id": 907, "state": "DISMISSED" }),
+    );
+
+    push_new_commit(&h, 7, &["octo"]);
+    h.client().poll_now().await.unwrap();
+    wait_for_reviews(&h, 7, 2).await;
+
+    let dismissed = h.github.requests_to(
+        Method::PUT,
+        "/repos/acme/api/pulls/7/reviews/907/dismissals",
+    );
+    assert_eq!(dismissed.len(), 1, "the stale approval is withdrawn");
+    assert_eq!(dismissed[0].body.as_ref().unwrap()["event"], "DISMISS");
+    assert_eq!(h.client().queue().await.unwrap().len(), 1);
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_comment_review_is_never_dismissed() {
+    let (h, _) = setup(&[7]).await;
+    h.claude
+        .respond_with(vec![
+            ClaudeResponse::review(&calm_review()),
+            ClaudeResponse::review(&valid_review()),
+        ])
+        .unwrap();
+    h.client().poll_now().await.unwrap();
+    wait_for_reviews(&h, 7, 1).await;
+    h.github.route(
+        Method::GET,
+        REVIEWS,
+        StatusCode::OK,
+        json!([{ "id": 907, "state": "COMMENTED", "user": { "login": "octo" }, "body": "earlier" }]),
+    );
+
+    push_new_commit(&h, 7, &["octo"]);
+    h.client().poll_now().await.unwrap();
+    wait_for_reviews(&h, 7, 2).await;
+
+    assert!(
+        h.github
+            .requests_to(
+                Method::PUT,
+                "/repos/acme/api/pulls/7/reviews/907/dismissals"
+            )
+            .is_empty()
+    );
+    h.shutdown().await.unwrap();
+}

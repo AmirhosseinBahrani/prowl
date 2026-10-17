@@ -6,6 +6,18 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Agent verdicts** (Settings → "Agent approves / requests changes on low-risk PRs", off by
+  default): on PRs that don't need a human, the agent's review approves or requests changes as
+  Claude recommends, instead of only commenting. If a newer commit needs a human, PRowl
+  dismisses its earlier approval.
+
+### Changed
+
+- PRowl no longer adds the `prowl:agent-reviewed` label; it still removes it from PRs labelled by
+  earlier versions when they're escalated to a human.
+
 ### Fixed
 
 - PRowl no longer pauses with "GitHub rate limit nearly used up" after ordinary polls. GitHub's

@@ -21,6 +21,7 @@ and are stored in the daemon's database. Scripts can use the Local API instead
 | `sleep_mode` | `ac_only` with a battery, else `always` | `always`, `ac_only`, `during_reviews` | When PRowl keeps the machine awake. See [sleep](#sleep). |
 | `skip_drafts` | `true` | — | Ignore draft PRs until they're marked ready. |
 | `include_team_requests` | `false` | — | Also review PRs requested from a team you're in, not only from you personally. |
+| `agent_verdicts` | `false` | — | On PRs that don't need a human, post Claude's recommendation as the verdict: **approve** or **request changes** instead of a comment. Earlier agent approvals are dismissed when a newer commit needs a human. |
 | `notifications` | `true` | — | Desktop notifications when a PR needs you or a review fails. |
 | `file_rules` | none | — | Per-repository globs that always need a human. See below. |
 
