@@ -9,8 +9,35 @@ use serde_json::Value;
 
 use crate::settings_tab::{Editing, FIELDS, Kind, SettingsTab};
 
-pub fn draw(tab: &SettingsTab, frame: &mut Frame, area: Rect) {
-    let [body, footer] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(area);
+pub fn draw(
+    tab: &SettingsTab,
+    account: Option<&str>,
+    confirm_sign_out: bool,
+    frame: &mut Frame,
+    area: Rect,
+) {
+    let [header, body, footer] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .areas(area);
+    let who = match account {
+        Some(login) => Span::raw(format!("@{login}")).bold().green(),
+        None => Span::raw("not connected").red(),
+    };
+    frame.render_widget(
+        Line::from(vec![
+            "  GitHub account: ".into(),
+            who,
+            "    ".into(),
+            crate::theme::key("[t] "),
+            "use a personal access token  ".into(),
+            crate::theme::key("[l] "),
+            "sign out".into(),
+        ]),
+        header,
+    );
     if tab.settings.is_none() {
         frame.render_widget(Paragraph::new("  Loading…").dim(), body);
         return;
@@ -57,7 +84,14 @@ pub fn draw(tab: &SettingsTab, frame: &mut Frame, area: Rect) {
         &mut state,
     );
 
-    let line = if let Some(Editing::NewRule { text }) = &tab.editing {
+    let line = if confirm_sign_out {
+        Line::from(vec![
+            " Sign out of GitHub? PRowl stops reviewing until you sign in again. "
+                .bold()
+                .yellow(),
+            "[y] yes  any other key: no".into(),
+        ])
+    } else if let Some(Editing::NewRule { text }) = &tab.editing {
         Line::from(vec![
             " new rule (owner/repo pattern): ".bold(),
             Span::raw(format!("{text}▏")),

@@ -81,9 +81,19 @@ flowchart LR
    ```sh
    curl -fsSL https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/install.sh | sh
    ```
-2. **Choose how PRowl signs in to GitHub** — a GitHub OAuth App you register once (sign in with
-   a one-time code; works across all your organisations) or a personal access token. See
+2. **Sign in to GitHub.** In the next step PRowl shows a one-time code to enter on GitHub
+   (release builds come with PRowl's OAuth App). You can also use a personal access token. See
    [docs/github-setup.md](docs/github-setup.md).
+
+   **Organisation repos missing?** Each organisation has to approve PRowl's OAuth App: on
+   <https://github.com/settings/connections/applications> open PRowl and click **Grant** (if you
+   own the org) or **Request** (an owner approves it). If an org owner won't approve it, sign in
+   with a personal access token instead. It acts as you, so the org doesn't need to approve an app:
+   - Create a classic token at <https://github.com/settings/tokens/new> with `repo` and `read:org`.
+   - If an org uses SSO, click **Configure SSO → Authorize** next to the token for that org.
+   - In `prowl`, press `t` on the Connect screen — or, if you're already signed in, in the
+     **Settings** tab — and paste the token (it replaces the current sign-in). From a shell:
+     `prowld login --token`.
 3. **Open the terminal UI** and follow the setup — connect GitHub (`enter` for a one-time code,
    `t` for a token), pick repositories, look at your Review Policy:
    ```sh
@@ -145,7 +155,7 @@ With these, start the background service yourself: `prowld service install`.
 | **4 History** | Every past review — who decided, severity, matched rules, cost, time taken. |
 | **5 Policy** | Your Review Policy and per-repository overrides; `e` edits in your `$EDITOR`, `h` shows versions and diffs, `t` dry-runs a PR. |
 | **6 Repos** | Choose which repositories PRowl watches. |
-| **7 Settings** | Change behaviour live — budgets, concurrency, keep-awake, file rules, … |
+| **7 Settings** | Change behaviour live — budgets, concurrency, keep-awake, file rules, … — and your GitHub account: `t` signs in with a personal access token, `l` signs out. |
 
 Press `?` anywhere for all keys. For scripts there's also a plain command line:
 

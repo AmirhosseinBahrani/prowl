@@ -6,6 +6,18 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- The Settings tab shows your GitHub account: `t` signs in with a personal access token
+  (replacing the current sign-in) and `l` signs out — no terminal commands needed.
+- The Connect screen and README explain how to get organisation repositories: approve PRowl for
+  each organisation, or sign in with a personal access token if an owner won't.
+
+### Fixed
+
+- The help screen (`?`) no longer cuts off or scrambles lines: it's laid out in two aligned
+  columns with a section per tab, sized to fit, with the update command at the bottom.
+
 ## [0.1.2] - 2026-10-17
 
 ### Added

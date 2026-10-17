@@ -138,6 +138,9 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
         let mut lines = vec![
             Line::from("Paste a personal access token with the repo and read:org scopes."),
             Line::from("PRowl checks it with GitHub, then keeps it in your OS keychain."),
+            Line::from("Create a classic one at https://github.com/settings/tokens/new").dim(),
+            Line::from("If an organisation uses SSO: Configure SSO → Authorize next to the token.")
+                .dim(),
             Line::from(""),
             Line::from(vec![
                 "token: ".bold(),
@@ -207,6 +210,8 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
                 "PRowl reviews pull requests where you're a requested reviewer.",
             ));
             lines.push(Line::from(""));
+            lines.extend(org_access_lines());
+            lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 crate::theme::key("[enter] "),
                 "connect with a one-time code  ".into(),
@@ -218,6 +223,28 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
             centered(frame, area, "Connect your GitHub account", lines);
         }
     }
+}
+
+/// Why organisation repos can be missing, and the way around it.
+fn org_access_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from("Organisation repos missing? Each organisation must approve PRowl:").bold(),
+        Line::from(
+            "Grant (owners) or Request it at https://github.com/settings/connections/applications",
+        ),
+        Line::from("If an org owner won't approve it, sign in with a personal access token instead.")
+            .dim(),
+        Line::from("It acts as you, so the org doesn't need to approve an app:").dim(),
+        Line::from(
+            "create a classic token at https://github.com/settings/tokens/new with repo and read:org,",
+        )
+        .dim(),
+        Line::from("authorize it for SSO if the org uses SSO (Configure SSO → Authorize),").dim(),
+        Line::from(
+            "then press [t] here and paste it (signed in already? Settings tab → [t])",
+        )
+        .dim(),
+    ]
 }
 
 fn policy_setup(frame: &mut Frame, area: Rect) {
@@ -374,7 +401,13 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
         Tab::Policy => crate::policy_ui::draw(&app.policy, frame, inner),
         Tab::Feed => crate::feed_ui::draw_feed(&app.feed, frame, inner),
         Tab::Queue => crate::queue_ui::draw(&app.queue, frame, inner),
-        Tab::Settings => crate::settings_ui::draw(&app.settings, frame, inner),
+        Tab::Settings => crate::settings_ui::draw(
+            &app.settings,
+            app.status.account.as_deref(),
+            app.confirm_sign_out,
+            frame,
+            inner,
+        ),
         Tab::History => crate::feed_ui::draw_history(&app.history, &app.status, frame, inner),
         Tab::Reviews => crate::reviews_ui::draw(&app.reviews, frame, inner),
     }
@@ -466,70 +499,117 @@ const UPDATE_COMMAND: &str = if cfg!(windows) {
 };
 
 fn help(frame: &mut Frame, area: Rect) {
-    let lines = vec![
-        Line::from(Span::styled("Keys", theme::accent())),
-        Line::from(""),
-        Line::from(vec![
-            theme::key("  ← → or tab"),
-            Span::raw("        next / previous tab (shift-tab goes back too)"),
-        ]),
-        Line::from(vec![
-            theme::key("  1–7"),
-            Span::raw("               jump to a tab"),
-        ]),
-        Line::from(vec![theme::key("  ↑↓ or j k"), Span::raw("         move")]),
-        Line::from(vec![
-            theme::key("  /"),
-            Span::raw("                 search (esc to finish)"),
-        ]),
-        Line::from(vec![
-            theme::key("  space"),
-            Span::raw("             watch / unwatch a repository"),
-        ]),
-        Line::from("  Queue tab: enter open · a approve · r request changes · d dismiss · o open"),
-        Line::from(format!("  Update PRowl: {}", UPDATE_COMMAND)),
-        Line::from(vec![
-            theme::key("  "),
-            Span::raw("           in a PR: ↑↓ scroll diff · ] [ next/previous file · esc back"),
-        ]),
-        Line::from("  Feed tab: space pause/follow · f filter · c clear · p show polls"),
-        Line::from(
-            "  Reviews tab: enter conversation & result · g/G top/end (follows live) · o open",
-        ),
-        Line::from("  History tab: enter details · o open on GitHub · f filter"),
-        Line::from("  Policy tab: e edit · h history · r restore · n new override"),
-        Line::from(vec![
-            theme::key("  "),
-            Span::raw("            x delete override · t dry-run a PR · esc back"),
-        ]),
-        Line::from(vec![
-            theme::key("  n / p"),
-            Span::raw("             next / previous page"),
-        ]),
-        Line::from(vec![
-            theme::key("  r"),
-            Span::raw("                 refresh or retry"),
-        ]),
-        Line::from(vec![
-            theme::key("  ?"),
-            Span::raw("                 this help"),
-        ]),
-        Line::from(vec![theme::key("  q, ctrl-c"), Span::raw("         quit")]),
-        Line::from(""),
-        Line::from("  press any key to close").dim(),
-    ];
-    let height = lines.len() as u16 + 2;
-    let width = 52.min(area.width);
+    let lines = help_lines();
+    // As wide as the longest line (plus border and padding), as tall as it then needs.
+    let widest = lines.iter().map(Line::width).max().unwrap_or(0) as u16;
+    let width = (widest + 4).min(area.width);
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let rows = paragraph.line_count(width.saturating_sub(2)) as u16 + 2;
+    let height = rows.min(area.height);
+    let paragraph =
+        paragraph.block(Block::bordered().border_style(Style::default().fg(theme::ACCENT)));
     let popup = Rect {
         x: area.x + area.width.saturating_sub(width) / 2,
         y: area.y + area.height.saturating_sub(height) / 2,
         width,
-        height: height.min(area.height),
+        height,
     };
     frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::bordered().border_style(Style::default().fg(theme::ACCENT))),
-        popup,
-    );
+    frame.render_widget(paragraph, popup);
+}
+
+/// The help screen's text: keys in one column, what they do in the next, a section per tab.
+pub fn help_lines() -> Vec<Line<'static>> {
+    let heading = |title: &str| Line::from(Span::styled(format!(" {title}"), theme::accent()));
+    let row = |keys: &str, what: &str| {
+        Line::from(vec![
+            Span::raw("   "),
+            theme::key(&format!("{keys:<14}")),
+            Span::raw(what.to_owned()),
+        ])
+    };
+    vec![
+        heading("Everywhere"),
+        row("← → tab", "next / previous tab (shift-tab: previous)"),
+        row("1–7", "jump to a tab"),
+        row("↑↓ j k", "move"),
+        row("n p", "next / previous page"),
+        row("r", "refresh or retry"),
+        row("?", "this help"),
+        row("q ctrl-c", "quit"),
+        Line::from(""),
+        heading("1 Queue"),
+        row("enter", "open: why it waits, the agent's notes, the diff"),
+        row("a r d", "approve · request changes · dismiss"),
+        row("o", "open on GitHub"),
+        row("↑↓ ] [ esc", "in a PR: scroll · next/previous file · back"),
+        heading("2 Feed"),
+        row("space f c p", "pause/follow · filter · clear · show polls"),
+        heading("3 Reviews"),
+        row("enter", "conversation & result"),
+        row("g G", "top / end (end follows a running review)"),
+        row("o", "open on GitHub"),
+        heading("4 History"),
+        row("enter o f", "details · open on GitHub · filter"),
+        heading("5 Policy"),
+        row("e h r", "edit · history · restore a version"),
+        row("n x t", "new override · delete override · dry-run a PR"),
+        heading("6 Repos"),
+        row("/ space", "search · watch / unwatch"),
+        heading("7 Settings"),
+        row("enter a x", "change · add file rule · remove file rule"),
+        row("t l", "sign in with a token · sign out of GitHub"),
+        Line::from(""),
+        heading("Update PRowl (rerun the installer)"),
+        Line::from(format!("   {UPDATE_COMMAND}")).dim(),
+        Line::from(""),
+        Line::from("   press any key to close").dim(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn render_help(width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| help(frame, frame.area())).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+            .collect()
+    }
+
+    #[test]
+    fn help_rows_fit_on_one_line_each_and_the_box_is_closed() {
+        let screen = render_help(120, 50);
+        let text = screen.join("\n");
+        for row in [
+            "← → tab       next / previous tab (shift-tab: previous)",
+            "a r d         approve · request changes · dismiss",
+            "g G           top / end (end follows a running review)",
+            "n x t         new override · delete override · dry-run a PR",
+            "enter a x     change · add file rule · remove file rule",
+            UPDATE_COMMAND,
+            "press any key to close",
+        ] {
+            assert!(text.contains(row), "missing {row:?} in:\n{text}");
+        }
+        let top = screen.iter().position(|l| l.contains('┌')).unwrap();
+        let bottom = screen.iter().position(|l| l.contains('└')).unwrap();
+        assert!(bottom > top);
+        assert!(
+            screen[bottom - 1].contains("press any key"),
+            "the box ends right after its last line:\n{text}"
+        );
+    }
+
+    #[test]
+    fn a_narrow_terminal_wraps_instead_of_overflowing() {
+        let screen = render_help(60, 70);
+        assert!(screen.iter().all(|l| l.chars().count() == 60));
+        assert!(screen.join("\n").contains("press any key to close"));
+    }
 }
