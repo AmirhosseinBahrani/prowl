@@ -46,6 +46,12 @@ PRowl is a Rust workspace with three crates:
   or an approval / change request with agent verdicts on — or the findings as review threads plus a "waiting for human approval"
   comment) and sets the `prowl:agent-reviewed` or `prowl:needs-human` label. Re-reviews of a new
   commit update PRowl's earlier comment instead of adding more.
+- **Verification** — after each poll (with agent verdicts on), PRowl asks GitHub's GraphQL API
+  whether the threads it opened on agent-only PRs are resolved. When they all are, it queues a
+  `verify` job: Claude gets the earlier findings and their thread states, checks the current
+  code, and lists only what remains. Nothing left → an approval (and the PR leaves the Human
+  Review Queue); otherwise a review with a thread per remaining issue. `v` / `prowl verify` /
+  `POST /v1/verify` start one by hand — the only way for PRs that need a human.
 - **Queue** — PRs that need you. Approving or requesting changes posts a real review as you and
   marks the PR `prowl:human-approved` / `prowl:changes-requested`.
 - **Power** — keeps the machine awake according to `sleep_mode` and detects wake-ups.
@@ -75,7 +81,8 @@ curl --unix-socket "$HOME/Library/Application Support/dev.prowl.prowl/prowld.soc
 | `GET/PUT /v1/settings` | Settings |
 | `GET /v1/jobs`, `GET /v1/jobs/{id}/transcript` | Reviews, and each one's full record: context and prompt, Claude's messages and tool calls, answer, decision, what was posted |
 | `GET /v1/reviews`, `GET /v1/costs`, `GET /v1/power`, `GET /v1/doctor` | Introspection |
-| `POST /v1/poll`, `POST /v1/dry-run`, `POST /v1/rerun` | Poll now, dry-run a PR, review a PR again |
+| `POST /v1/poll`, `POST /v1/dry-run`, `POST /v1/rerun`, `POST /v1/verify` | Poll now, dry-run a PR, review a PR again, verify its fixes |
+| `GET /v1/threads?repo=&pr=` | The PR's review threads and whether each is resolved |
 
 The API is for local tools and is not yet considered stable.
 

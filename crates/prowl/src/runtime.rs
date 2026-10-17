@@ -219,6 +219,7 @@ fn execute(
             Cmd::LoadReviews => Msg::Reviews(client.reviews(None).await.map_err(err)),
             Cmd::LoadJobs => Msg::Jobs(client.jobs().await.map_err(err)),
             Cmd::Rerun { repo, pr } => Msg::Rerun(client.rerun(&repo, pr).await.map_err(err)),
+            Cmd::Verify { repo, pr } => Msg::Verify(client.verify(&repo, pr).await.map_err(err)),
             Cmd::LoadTranscript { job_id } => {
                 Msg::Transcript(job_id, client.transcript(job_id).await.map_err(err))
             }

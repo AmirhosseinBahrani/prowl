@@ -228,6 +228,25 @@ impl Queue {
         })
     }
 
+    /// After a verification the user asked for approved the PR: if it waits in the queue, it
+    /// leaves it as approved. Returns whether it was queued.
+    pub(crate) async fn approved_by_verification(
+        &self,
+        repo: &str,
+        pr_number: u64,
+    ) -> Result<bool, QueueError> {
+        match self.pending_item(repo, pr_number).await {
+            Ok(_) => {
+                let token = self.token().await?;
+                self.relabel(&token, repo, pr_number, "approved").await?;
+                self.mark(repo, pr_number, "approved", "verified").await?;
+                Ok(true)
+            }
+            Err(QueueError::NotQueued(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Resolves queued PRs the user reviewed on GitHub directly, or that were closed.
     pub(crate) async fn sync_with_github(&self) -> Result<(), QueueError> {
         let AuthState::Connected { login, .. } = self.auth.state().await else {
