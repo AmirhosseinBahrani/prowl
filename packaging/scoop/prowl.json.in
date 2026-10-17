@@ -1,0 +1,16 @@
+{
+    "version": "{{VERSION}}",
+    "description": "Reviews GitHub pull requests around the clock with your local claude CLI",
+    "homepage": "https://github.com/AmirhosseinBahrani/prowl",
+    "license": "Proprietary",
+    "depends": "git",
+    "architecture": {
+        "64bit": {
+            "url": "{{BASE_URL}}/prowl-{{VERSION}}-x86_64-pc-windows-msvc.zip",
+            "hash": "{{SHA_WINDOWS}}",
+            "extract_dir": "prowl-{{VERSION}}-x86_64-pc-windows-msvc"
+        }
+    },
+    "bin": ["prowl.exe", "prowld.exe", "prowld-service.exe"],
+    "post_install": "Write-Host 'Run: prowld service install   then: prowl'"
+}

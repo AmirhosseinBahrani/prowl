@@ -1,0 +1,45 @@
+# Homebrew formula for PRowl, rendered by packaging/render.py for each release.
+class Prowl < Formula
+  desc "Reviews GitHub pull requests around the clock with your local claude CLI"
+  homepage "https://github.com/AmirhosseinBahrani/prowl"
+  version "{{VERSION}}"
+
+  on_macos do
+    on_arm do
+      url "{{BASE_URL}}/prowl-{{VERSION}}-aarch64-apple-darwin.tar.gz"
+      sha256 "{{SHA_MAC_ARM}}"
+    end
+    on_intel do
+      url "{{BASE_URL}}/prowl-{{VERSION}}-x86_64-apple-darwin.tar.gz"
+      sha256 "{{SHA_MAC_INTEL}}"
+    end
+  end
+  on_linux do
+    on_arm do
+      url "{{BASE_URL}}/prowl-{{VERSION}}-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "{{SHA_LINUX_ARM}}"
+    end
+    on_intel do
+      url "{{BASE_URL}}/prowl-{{VERSION}}-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "{{SHA_LINUX_X64}}"
+    end
+  end
+
+  depends_on "git"
+
+  def install
+    bin.install "prowl", "prowld", "prowld-service"
+  end
+
+  def caveats
+    <<~EOS
+      Start PRowl's background service (it then starts at every login):
+        prowld service install
+      Then run `prowl` to connect GitHub and choose repositories.
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/prowl --version")
+  end
+end
