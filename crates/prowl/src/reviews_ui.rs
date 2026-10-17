@@ -19,8 +19,9 @@ pub fn draw(tab: &ReviewsTab, frame: &mut Frame, area: Rect) {
     if let Some(open) = &tab.open {
         draw_open(tab, open, frame, body);
         frame.render_widget(
-            theme::hints(
-                " ↑↓ scroll · [space/p] page · [g/G] top/end (follows live) · [o] open · [R] re-review · [esc] back",
+            footer_line(
+                tab,
+                " ↑↓ scroll · [space/p] page · [g/G] top/end · [o] open · [R] re-review · [x] cancel · [esc] back",
             ),
             footer,
         );
@@ -68,11 +69,25 @@ pub fn draw(tab: &ReviewsTab, frame: &mut Frame, area: Rect) {
         frame.render_stateful_widget(table, body, &mut state);
     }
     frame.render_widget(
-        theme::hints(
-            " ↑↓ select · [enter] conversation & result · [o] open on GitHub · [R] re-review · [r] refresh",
+        footer_line(
+            tab,
+            " ↑↓ select · [enter] conversation & result · [o] open · [R] re-review · [x] cancel · [r] refresh",
         ),
         footer,
     );
+}
+
+/// The key hints, or the "cancel this review?" question while it waits for an answer.
+fn footer_line(tab: &ReviewsTab, hints: &str) -> Line<'static> {
+    match tab.confirm_cancel {
+        Some(_) => Line::from(vec![
+            " Stop this review? Claude is stopped and nothing more is posted. "
+                .bold()
+                .yellow(),
+            "[y] yes  any other key: no".into(),
+        ]),
+        None => theme::hints(hints),
+    }
 }
 
 fn draw_open(tab: &ReviewsTab, open: &OpenReview, frame: &mut Frame, area: Rect) {

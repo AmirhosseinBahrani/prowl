@@ -6,6 +6,18 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Stop PRowl**: `Q` in the TUI quits and stops the background service (after asking);
+  `prowld service stop` / `start` do the same from a shell. The service stays installed and
+  starts again at your next login, or with `s` on the TUI's "not running" screen.
+- **Cancel a review**: `x` in the Reviews tab (or `prowl cancel owner/repo#N`) stops a waiting
+  or running review or re-review — a running one stops Claude at once and posts nothing more.
+
+### Changed
+
+- The help screen (`?`) is more compact, one line per tab, so it fits smaller terminals.
+
 ### Fixed
 
 - Upgrading on macOS no longer fails with `"launchctl" failed: Bootstrap failed: 5: Input/output

@@ -176,6 +176,17 @@ fn execute(
             }
             Cmd::LoadStatusBar => Msg::StatusBar(status_bar(&client).await),
             Cmd::InstallService => Msg::ServiceInstalled(install_service(home).await),
+            Cmd::StartService => Msg::ServiceInstalled(
+                service_action(home, prowld::service::start)
+                    .await
+                    .map(|()| "Background service started.".to_owned()),
+            ),
+            Cmd::StopService => {
+                Msg::ServiceStopped(service_action(home, prowld::service::stop).await)
+            }
+            Cmd::CancelJob { job_id } => {
+                Msg::JobCancelled(client.cancel_job(job_id).await.map_err(err))
+            }
             Cmd::LoadPolicies => Msg::Policies(client.policies().await.map_err(err)),
             Cmd::LoadPolicy { scope } => match parse_scope(&scope) {
                 Ok(parsed) => match client.policy(&parsed).await {
@@ -309,6 +320,21 @@ async fn status_bar(client: &ApiClient) -> StatusBar {
         power: power.ok(),
         costs: costs.ok(),
     }
+}
+
+/// Runs a service operation (start, stop) on PRowl's background service for `home`.
+async fn service_action(
+    home: PathBuf,
+    action: fn(&prowld::service::ServiceSpec) -> anyhow::Result<prowld::service::ServiceStatus>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        use prowld::service::{DEFAULT_NAME, ServiceSpec};
+        let spec =
+            ServiceSpec::beside_current_exe(DEFAULT_NAME, &home).map_err(|e| format!("{e:#}"))?;
+        action(&spec).map(drop).map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 async fn install_service(home: PathBuf) -> Result<String, String> {

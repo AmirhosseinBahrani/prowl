@@ -105,6 +105,33 @@ pub fn uninstall(spec: &ServiceSpec) -> anyhow::Result<ServiceStatus> {
     status(spec)
 }
 
+/// Stops the service. It stays installed: it starts again with `start`, or at the next login.
+pub fn stop(spec: &ServiceSpec) -> anyhow::Result<ServiceStatus> {
+    imp::stop(spec)?;
+    settle(spec, false)
+}
+
+/// Starts an installed service that was stopped.
+pub fn start(spec: &ServiceSpec) -> anyhow::Result<ServiceStatus> {
+    if !status(spec)?.installed {
+        bail!("the PRowl service isn't installed; run `prowld service install`");
+    }
+    imp::start(spec)?;
+    settle(spec, true)
+}
+
+/// The status once the service is (or after 3 s, still isn't) `running`.
+fn settle(spec: &ServiceSpec, running: bool) -> anyhow::Result<ServiceStatus> {
+    for _ in 0..30 {
+        let current = status(spec)?;
+        if current.running == running {
+            return Ok(current);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    status(spec)
+}
+
 pub fn status(spec: &ServiceSpec) -> anyhow::Result<ServiceStatus> {
     imp::status(spec)
 }
@@ -327,6 +354,27 @@ mod imp {
         Ok(())
     }
 
+    pub fn stop(spec: &ServiceSpec) -> anyhow::Result<()> {
+        let target = format!("{}/{}", domain()?, spec.label());
+        let _ = run(Command::new("launchctl").arg("bootout").arg(&target));
+        wait_until(std::time::Duration::from_secs(10), || {
+            run(Command::new("launchctl").arg("print").arg(&target)).is_err()
+        });
+        Ok(())
+    }
+
+    pub fn start(spec: &ServiceSpec) -> anyhow::Result<()> {
+        let domain = domain()?;
+        let path = plist_path(spec)?;
+        retry(5, std::time::Duration::from_millis(500), || {
+            run(Command::new("launchctl")
+                .arg("bootstrap")
+                .arg(&domain)
+                .arg(&path))
+        })
+        .map(drop)
+    }
+
     pub fn uninstall(spec: &ServiceSpec) -> anyhow::Result<()> {
         let _ = run(Command::new("launchctl").arg("bootout").arg(format!(
             "{}/{}",
@@ -388,6 +436,14 @@ mod imp {
         Ok(())
     }
 
+    pub fn stop(spec: &ServiceSpec) -> anyhow::Result<()> {
+        run(systemctl().arg("stop").arg(unit_name(spec))).map(drop)
+    }
+
+    pub fn start(spec: &ServiceSpec) -> anyhow::Result<()> {
+        run(systemctl().arg("start").arg(unit_name(spec))).map(drop)
+    }
+
     pub fn uninstall(spec: &ServiceSpec) -> anyhow::Result<()> {
         let _ = run(systemctl().args(["disable", "--now"]).arg(unit_name(spec)));
         let path = unit_path(spec)?;
@@ -444,6 +500,20 @@ mod imp {
             .args(["/Run", "/TN"])
             .arg(task_name(spec)))?;
         Ok(())
+    }
+
+    pub fn stop(spec: &ServiceSpec) -> anyhow::Result<()> {
+        run(Command::new("schtasks")
+            .args(["/End", "/TN"])
+            .arg(task_name(spec)))
+        .map(drop)
+    }
+
+    pub fn start(spec: &ServiceSpec) -> anyhow::Result<()> {
+        run(Command::new("schtasks")
+            .args(["/Run", "/TN"])
+            .arg(task_name(spec)))
+        .map(drop)
     }
 
     pub fn uninstall(spec: &ServiceSpec) -> anyhow::Result<()> {

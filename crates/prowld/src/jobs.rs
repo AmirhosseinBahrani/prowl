@@ -173,6 +173,20 @@ impl Jobs {
         Ok(rows.into_iter().map(|(r, n)| (r, n as u64)).collect())
     }
 
+    /// Cancels a job that hasn't started. Returns whether it was waiting.
+    pub(crate) async fn cancel_waiting(&self, id: i64, reason: &str) -> anyhow::Result<bool> {
+        let done = sqlx::query(
+            "UPDATE jobs SET status = 'cancelled', error = ?, updated_at_ms = ?
+             WHERE id = ? AND status IN ('queued', 'interrupted')",
+        )
+        .bind(reason)
+        .bind(events::now_ms())
+        .bind(id)
+        .execute(&self.db)
+        .await?;
+        Ok(done.rows_affected() == 1)
+    }
+
     pub(crate) async fn get(&self, id: i64) -> anyhow::Result<Option<Job>> {
         let row: Option<JobRow> = sqlx::query_as(
             "SELECT id, repo, pr_number, head_sha, title, author, html_url, status, attempts,

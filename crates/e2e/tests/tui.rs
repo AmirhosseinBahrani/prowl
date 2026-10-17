@@ -211,7 +211,7 @@ async fn without_a_daemon_it_explains_and_offers_to_install() {
     let tui = Tui::start(client, home);
 
     tui.wait_for("prowld is not running").await;
-    tui.wait_for("[i] install and start it").await;
+    tui.wait_for("[i] (re)install it").await;
     tui.quit().await;
 }
 

@@ -73,6 +73,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/threads", get(threads))
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/jobs/{id}/transcript", get(job_transcript))
+        .route("/v1/jobs/{id}/cancel", post(cancel_job))
         .route("/v1/reviews", get(list_reviews))
         .route("/v1/power", get(power_status))
         .route("/v1/costs", get(costs))
@@ -192,6 +193,20 @@ pub(crate) fn manual_error(e: crate::poller::ManualError) -> ApiError {
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<Job>>, ApiError> {
     Ok(Json(state.jobs.list().await.map_err(ApiError::internal)?))
+}
+
+/// Stops a waiting or running review.
+async fn cancel_job(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<crate::worker::Cancelled>, ApiError> {
+    match state.worker.cancel(id).await.map_err(ApiError::internal)? {
+        Some(cancelled) => Ok(Json(cancelled)),
+        None => Err(ApiError(
+            StatusCode::CONFLICT,
+            format!("job {id} isn't waiting or running"),
+        )),
+    }
 }
 
 async fn job_transcript(

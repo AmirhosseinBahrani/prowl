@@ -120,6 +120,8 @@ pub enum Msg {
     Reviews(Result<Vec<prowld::Review>, String>),
     Jobs(Result<Vec<prowld::Job>, String>),
     Rerun(Result<prowld::Job, String>),
+    ServiceStopped(Result<(), String>),
+    JobCancelled(Result<prowld::Cancelled, String>),
     Verify(Result<prowld::Job, String>),
     /// The transcript of this job.
     Transcript(
@@ -149,6 +151,14 @@ pub enum Cmd {
     LoadWatchedCount,
     StartLogin,
     SignOut,
+    /// Stop the background service (it stays installed).
+    StopService,
+    /// Start the installed background service again.
+    StartService,
+    /// Stop a waiting or running review.
+    CancelJob {
+        job_id: i64,
+    },
     SignInWithToken {
         token: String,
     },
@@ -240,6 +250,8 @@ pub struct App {
     pub login_error: Option<String>,
     /// "Sign out of GitHub?" is waiting for an answer (Settings tab).
     pub confirm_sign_out: bool,
+    /// "Stop the background service and quit?" is waiting for an answer.
+    pub confirm_stop_service: bool,
     pub repos: RepoPicker,
     pub policy: PolicyTab,
     pub feed: FeedTab,
@@ -270,6 +282,7 @@ impl App {
             token_input: None,
             login_error: None,
             confirm_sign_out: false,
+            confirm_stop_service: false,
             repos: RepoPicker::default(),
             policy: PolicyTab::default(),
             feed: FeedTab::default(),
@@ -408,6 +421,27 @@ impl App {
                 self.notice = Some(message);
                 self.screen = Screen::Connecting;
                 vec![Cmd::Connect]
+            }
+            Msg::ServiceStopped(Ok(())) => {
+                self.quit = true;
+                vec![]
+            }
+            Msg::ServiceStopped(Err(e)) => {
+                self.notice = Some(format!("Could not stop the background service: {e}"));
+                vec![]
+            }
+            Msg::JobCancelled(Ok(cancelled)) => {
+                self.notice = Some(match cancelled {
+                    prowld::Cancelled::Waiting => "Cancelled before it started.".into(),
+                    prowld::Cancelled::Running => {
+                        "Stopped: Claude was stopped and nothing more is posted.".into()
+                    }
+                });
+                self.reviews.refresh()
+            }
+            Msg::JobCancelled(Err(e)) => {
+                self.notice = Some(format!("Couldn't cancel: {e}"));
+                vec![]
             }
             Msg::ServiceInstalled(Err(e)) => {
                 self.notice = Some(format!("Could not install the service: {e}"));
@@ -614,6 +648,15 @@ impl App {
         if self.screen == Screen::Login && self.token_input.is_some() {
             return self.on_token_key(key);
         }
+        if std::mem::take(&mut self.confirm_stop_service) {
+            self.notice = None;
+            return if key.code == KeyCode::Char('y') {
+                self.notice = Some("Stopping PRowl's background service…".into());
+                vec![Cmd::StopService]
+            } else {
+                vec![]
+            };
+        }
         if std::mem::take(&mut self.confirm_sign_out) {
             return if key.code == KeyCode::Char('y') {
                 self.notice = Some("Signing out of GitHub…".into());
@@ -629,6 +672,7 @@ impl App {
                 Tab::History if self.history.captures_keys() => return self.history.on_key(key),
                 Tab::Queue if self.queue.captures_keys() => return self.queue.on_key(key),
                 Tab::Settings if self.settings.captures_keys() => return self.settings.on_key(key),
+                Tab::Reviews if self.reviews.captures_keys() => return self.reviews.on_key(key),
                 _ => {}
             }
         }
@@ -639,6 +683,17 @@ impl App {
         match key.code {
             KeyCode::Char('q') => {
                 self.quit = true;
+                return vec![];
+            }
+            // Quit and stop the background service too (only while it's running).
+            KeyCode::Char('Q') if self.screen != Screen::DaemonDown => {
+                self.confirm_stop_service = true;
+                self.notice = Some(
+                    "Stop PRowl's background service and quit? Nothing is reviewed until it \
+                     starts again (prowl → [s], prowld service start, or your next login). \
+                     [y] yes · any other key: no"
+                        .into(),
+                );
                 return vec![];
             }
             KeyCode::Char('?') => {
@@ -658,6 +713,10 @@ impl App {
                 KeyCode::Char('i') => {
                     self.notice = Some("Installing the background service…".into());
                     vec![Cmd::InstallService]
+                }
+                KeyCode::Char('s') => {
+                    self.notice = Some("Starting the background service…".into());
+                    vec![Cmd::StartService]
                 }
                 _ => vec![],
             },
@@ -1264,6 +1323,33 @@ mod tests {
                 token: "ghp_new".into()
             }]
         );
+    }
+
+    #[test]
+    fn big_q_stops_the_background_service_after_asking() {
+        let mut app = connected_on_settings();
+        app.tab = Tab::Queue;
+        assert!(app.update(key(KeyCode::Char('Q'))).is_empty());
+        assert!(app.confirm_stop_service);
+        assert!(
+            app.update(key(KeyCode::Char('n'))).is_empty(),
+            "anything else keeps it"
+        );
+        assert!(!app.quit);
+
+        app.update(key(KeyCode::Char('Q')));
+        assert_eq!(app.update(key(KeyCode::Char('y'))), [Cmd::StopService]);
+        assert!(!app.quit, "quits once it has stopped");
+        app.update(Msg::ServiceStopped(Ok(())));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn a_stopped_service_can_be_started_from_the_not_running_screen() {
+        let mut app = App::new("sock");
+        app.update(Msg::Connected(Err("connection refused".into())));
+        assert_eq!(app.screen, Screen::DaemonDown);
+        assert_eq!(app.update(key(KeyCode::Char('s'))), [Cmd::StartService]);
     }
 
     fn healthy() -> Doctor {

@@ -48,6 +48,10 @@ enum ServiceAction {
     Uninstall,
     /// Show whether the service is installed and running.
     Status,
+    /// Stop the service; it stays installed and starts again with `start` or at next login.
+    Stop,
+    /// Start the installed service again.
+    Start,
 }
 
 #[tokio::main]
@@ -79,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
                 ServiceAction::Install => service::install(&spec)?,
                 ServiceAction::Uninstall => service::uninstall(&spec)?,
                 ServiceAction::Status => service::status(&spec)?,
+                ServiceAction::Stop => service::stop(&spec)?,
+                ServiceAction::Start => service::start(&spec)?,
             };
             println!("{}", serde_json::to_string_pretty(&status)?);
             Ok(())

@@ -55,6 +55,39 @@ pub async fn verify(client: &ApiClient, pr: &str) -> anyhow::Result<String> {
     ))
 }
 
+/// Stops every waiting or running review of `owner/repo#n`.
+pub async fn cancel(client: &ApiClient, pr: &str) -> anyhow::Result<String> {
+    let (repo, number) = parse_pr_ref(pr)
+        .ok_or_else(|| anyhow::anyhow!("expected owner/repo#number, got {pr:?}"))?;
+    let active: Vec<prowld::Job> = client
+        .jobs()
+        .await?
+        .into_iter()
+        .filter(|j| {
+            j.repo.eq_ignore_ascii_case(&repo)
+                && j.pr_number == number
+                && matches!(j.status.as_str(), "queued" | "running" | "interrupted")
+        })
+        .collect();
+    if active.is_empty() {
+        return Ok(format!(
+            "Nothing is waiting or running for {repo}#{number}.\n"
+        ));
+    }
+    let mut out = String::new();
+    for job in active {
+        let what = match client.cancel_job(job.id).await? {
+            prowld::Cancelled::Waiting => "cancelled before it started",
+            prowld::Cancelled::Running => "stopped",
+        };
+        out.push_str(&format!(
+            "{repo}#{number} ({}, job {}): {what}.\n",
+            job.kind, job.id
+        ));
+    }
+    Ok(out)
+}
+
 /// Approves, requests changes on, or dismisses `owner/repo#n` from the queue.
 pub async fn resolve(
     client: &ApiClient,

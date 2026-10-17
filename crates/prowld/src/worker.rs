@@ -67,7 +67,21 @@ struct Inner {
     budget_reported: std::sync::Mutex<Option<i64>>,
     /// Reviews running right now, read by the power manager.
     active: Arc<std::sync::atomic::AtomicUsize>,
+    /// How to stop each running job, by id.
+    running: std::sync::Mutex<std::collections::HashMap<i64, CancellationToken>>,
 }
+
+/// What cancelling a job did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cancelled {
+    /// It was waiting and won't run.
+    Waiting,
+    /// It was running and is being stopped.
+    Running,
+}
+
+pub(crate) const CANCELLED_BY_USER: &str = "cancelled by you";
 
 pub(crate) struct WorkerParts {
     pub jobs: Jobs,
@@ -107,6 +121,7 @@ impl Worker {
                 retry: parts.retry,
                 budget_reported: std::sync::Mutex::new(None),
                 active: parts.active,
+                running: std::sync::Mutex::default(),
             }),
         }
     }
@@ -135,6 +150,12 @@ impl Worker {
                     };
                     let active = this.inner.active.clone();
                     active.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let cancel = CancellationToken::new();
+                    this.inner
+                        .running
+                        .lock()
+                        .unwrap()
+                        .insert(job.id, cancel.clone());
                     let this = this.clone();
                     let shutdown = shutdown.clone();
                     tokio::spawn(async move {
@@ -142,7 +163,10 @@ impl Worker {
                             () = this.run(&job) => {}
                             // Left as `running`; marked interrupted and retried on next start.
                             () = shutdown.cancelled() => {}
+                            // Dropping the review stops Claude (its process is killed on drop).
+                            () = cancel.cancelled() => this.cancelled(&job).await,
                         }
+                        this.inner.running.lock().unwrap().remove(&job.id);
                         active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     });
                 }
@@ -734,6 +758,55 @@ impl Worker {
             .await;
         }
         Ok(None)
+    }
+
+    /// Stops a job: one that waits won't run, a running one is stopped where it is (nothing more
+    /// is posted). `None` if the job isn't waiting or running.
+    pub(crate) async fn cancel(&self, id: i64) -> anyhow::Result<Option<Cancelled>> {
+        if let Some(token) = self.inner.running.lock().unwrap().get(&id) {
+            token.cancel();
+            return Ok(Some(Cancelled::Running));
+        }
+        if self
+            .inner
+            .jobs
+            .cancel_waiting(id, CANCELLED_BY_USER)
+            .await?
+        {
+            if let Some(job) = self.inner.jobs.get(id).await? {
+                self.emit(
+                    kind::CANCELLED,
+                    &job,
+                    serde_json::json!({ "reason": CANCELLED_BY_USER }),
+                )
+                .await;
+            }
+            return Ok(Some(Cancelled::Waiting));
+        }
+        Ok(None)
+    }
+
+    /// Cleans up after a running job was cancelled.
+    async fn cancelled(&self, job: &Job) {
+        // The transcript first: once the job reads as cancelled, its record is complete.
+        self.record(
+            job,
+            transcripts::kind::ERROR,
+            serde_json::json!({ "message": "Cancelled by you; nothing more was posted." }),
+        )
+        .await;
+        self.inner.workspace.discard(&job.repo, job.id).await;
+        let _ = self
+            .inner
+            .jobs
+            .finish(job.id, "cancelled", Some(CANCELLED_BY_USER))
+            .await;
+        self.emit(
+            kind::CANCELLED,
+            job,
+            serde_json::json!({ "reason": CANCELLED_BY_USER }),
+        )
+        .await;
     }
 
     /// Posts a verification's result: an approval when everything was addressed (and, for a

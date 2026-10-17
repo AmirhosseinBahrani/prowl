@@ -278,6 +278,12 @@ impl ApiClient {
         self.get_json("/v1/jobs").await
     }
 
+    /// Stops a waiting or running review.
+    pub async fn cancel_job(&self, job_id: i64) -> Result<crate::Cancelled, ClientError> {
+        self.call_json(Method::POST, &format!("/v1/jobs/{job_id}/cancel"))
+            .await
+    }
+
     /// Everything a job's review runs saw and did, oldest first.
     pub async fn transcript(
         &self,

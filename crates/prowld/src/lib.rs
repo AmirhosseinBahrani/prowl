@@ -57,4 +57,5 @@ pub use review::ReviewOutput;
 pub use reviews::Review;
 pub use server::{Costs, Status};
 pub use settings::{BudgetDay, Settings};
+pub use worker::Cancelled;
 pub use worker::DryRun;
