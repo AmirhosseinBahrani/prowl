@@ -7,7 +7,6 @@ use crate::github::{GitHub, GitHubError, InlineComment, NewReview, Submitted};
 use crate::publications::Prior;
 use crate::review::{Finding, ReviewOutput};
 
-/// No longer added; still removed from PRs that earlier versions labelled.
 pub const LABEL_AGENT_REVIEWED: &str = "prowl:agent-reviewed";
 pub const LABEL_NEEDS_HUMAN: &str = "prowl:needs-human";
 pub const LABEL_HUMAN_APPROVED: &str = "prowl:human-approved";
@@ -73,7 +72,7 @@ pub(crate) fn marker(target: &Target<'_>) -> String {
 }
 
 /// Submits an AGENT_ONLY review with inline notes on diff lines. It is a COMMENT review unless
-/// agent verdicts are on (see [`agent_event`]).
+/// agent verdicts are on (see [`agent_event`]). The caller labels the PR.
 pub(crate) async fn agent_only(
     github: &GitHub,
     token: &str,
@@ -156,6 +155,14 @@ pub(crate) async fn publish_result(
                 },
                 None => agent_only(github, token, target, review).await?,
             };
+            add_label(
+                github,
+                token,
+                target.repo,
+                target.number,
+                LABEL_AGENT_REVIEWED,
+            )
+            .await?;
             if let Some((old, _)) = prior.agent_review.take() {
                 let body = superseded_body(target, &posted.html_url);
                 ignore_missing(
