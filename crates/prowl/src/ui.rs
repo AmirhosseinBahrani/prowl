@@ -451,8 +451,8 @@ fn help(frame: &mut Frame, area: Rect) {
         Line::from(Span::styled("Keys", theme::accent())),
         Line::from(""),
         Line::from(vec![
-            theme::key("  tab / shift-tab"),
-            Span::raw("   next / previous tab"),
+            theme::key("  ← → or tab"),
+            Span::raw("        next / previous tab (shift-tab goes back too)"),
         ]),
         Line::from(vec![
             theme::key("  1–6"),
