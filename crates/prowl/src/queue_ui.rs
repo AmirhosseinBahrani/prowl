@@ -30,18 +30,14 @@ pub fn draw(tab: &QueueTab, frame: &mut Frame, area: Rect) {
                 Some(s) => format!("{s:?}").to_lowercase(),
                 None => "unusable".into(),
             };
-            let style = match severity.as_str() {
-                "critical" | "unusable" => {
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-                }
-                "high" => Style::default().fg(Color::Red),
-                "medium" => Style::default().fg(Color::Yellow),
-                _ => Style::default(),
-            };
+
             let why: Vec<String> = item.reasons.iter().map(short_reason).collect();
             Row::new(vec![
-                Line::from(Span::styled(severity, style)),
-                Line::from(format!("{}#{}", item.repo, item.pr_number)),
+                Line::from(crate::theme::severity_badge(&severity)),
+                Line::from(crate::theme::pr_ref(format!(
+                    "{}#{}",
+                    item.repo, item.pr_number
+                ))),
                 Line::from(item.title.clone()),
                 Line::from(why.join(", ")),
                 Line::from(duration(now - item.queued_at_ms)),
@@ -50,7 +46,7 @@ pub fn draw(tab: &QueueTab, frame: &mut Frame, area: Rect) {
         let table = Table::new(
             rows,
             [
-                Constraint::Length(9),
+                Constraint::Length(10),
                 Constraint::Length(18),
                 Constraint::Min(12),
                 Constraint::Length(26),
@@ -94,11 +90,12 @@ fn footer_line(tab: &QueueTab) -> Line<'static> {
         return Line::from(format!(" {error}")).red();
     }
     if tab.detail.is_some() {
-        Line::from(" [a] approve · [r] request changes · [d] dismiss · [o] open · ↑↓ scroll · ] [ file · [esc] back".dim())
+        crate::theme::hints(
+            " [a] approve · [r] request changes · [d] dismiss · [o] open · ↑↓ scroll · ] [ file · [esc] back",
+        )
     } else {
-        Line::from(
-            " [enter] open · [a] approve · [r] request changes · [d] dismiss · [o] open on GitHub"
-                .dim(),
+        crate::theme::hints(
+            " [enter] open · [a] approve · [r] request changes · [d] dismiss · [o] open on GitHub",
         )
     }
 }
@@ -144,9 +141,9 @@ fn draw_detail(tab: &QueueTab, detail: &prowld::QueueDetail, frame: &mut Frame, 
         .take(bottom.height as usize)
         .map(|line| {
             let style = if line.starts_with("diff --git") {
-                Style::default().add_modifier(Modifier::BOLD)
+                crate::theme::accent()
             } else if line.starts_with("@@") {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(Color::Magenta)
             } else if line.starts_with('+') && !line.starts_with("+++") {
                 Style::default().fg(Color::Green)
             } else if line.starts_with('-') && !line.starts_with("---") {

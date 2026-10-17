@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap};
 
 use crate::app::{App, PER_PAGE, Screen, Tab};
+use crate::theme;
 
 pub fn draw(app: &App, frame: &mut Frame) {
     let [title, body, notice, status] = Layout::vertical([
@@ -20,8 +21,11 @@ pub fn draw(app: &App, frame: &mut Frame) {
 
     frame.render_widget(
         Line::from(vec![
-            " PRowl ".bold().reversed(),
-            " pull-request reviews, around the clock".dim(),
+            theme::badge(" PRowl "),
+            Span::styled(
+                " pull-request reviews, around the clock",
+                Style::default().fg(theme::MUTED),
+            ),
         ]),
         title,
     );
@@ -31,7 +35,12 @@ pub fn draw(app: &App, frame: &mut Frame) {
         Screen::Doctor => doctor(app, frame, body),
         Screen::Login => login(app, frame, body),
         Screen::Repos => {
-            let block = Block::bordered().title(" Choose repositories to watch ");
+            let block = Block::bordered()
+                .border_style(theme::border())
+                .title(Span::styled(
+                    " Choose repositories to watch ",
+                    theme::accent(),
+                ));
             let inner = block.inner(body);
             frame.render_widget(block, body);
             repo_picker(app, frame, inner, true);
@@ -45,6 +54,9 @@ pub fn draw(app: &App, frame: &mut Frame) {
     status_bar(app, frame, status);
     if app.help {
         help(frame, body);
+    }
+    if theme::no_color() {
+        theme::strip_colors(frame.buffer_mut());
     }
 }
 
@@ -72,11 +84,11 @@ fn daemon_down(app: &App, frame: &mut Frame, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from("PRowl's background service isn't running."));
     lines.push(Line::from(vec![
-        "[i] ".bold(),
+        crate::theme::key("[i] "),
         "install and start it  ".into(),
-        "[r] ".bold(),
+        crate::theme::key("[r] "),
         "retry  ".into(),
-        "[q] ".bold(),
+        crate::theme::key("[q] "),
         "quit".into(),
     ]));
     centered(frame, area, "prowld is not running", lines);
@@ -111,11 +123,11 @@ fn doctor(app: &App, frame: &mut Frame, area: Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        "[r] ".bold(),
+        crate::theme::key("[r] "),
         "check again  ".into(),
-        "[enter] ".bold(),
+        crate::theme::key("[enter] "),
         "continue anyway  ".into(),
-        "[q] ".bold(),
+        crate::theme::key("[q] "),
         "quit".into(),
     ]));
     centered(frame, area, "PRowl needs a couple of tools", lines);
@@ -138,9 +150,9 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
             lines.push(Line::from(""));
         }
         lines.push(Line::from(vec![
-            "[enter] ".bold(),
+            crate::theme::key("[enter] "),
             "sign in  ".into(),
-            "[esc] ".bold(),
+            crate::theme::key("[esc] "),
             "back".into(),
         ]));
         centered(frame, area, "Sign in with a token", lines);
@@ -165,11 +177,11 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
             ];
             lines.extend(qr_lines(verification_uri));
             lines.push(Line::from(vec![
-                "[o] ".bold(),
+                crate::theme::key("[o] "),
                 "open it in your browser · waiting for GitHub…".dim(),
             ]));
             lines.push(Line::from(vec![
-                "[t] ".bold(),
+                crate::theme::key("[t] "),
                 "use a personal access token instead".dim(),
             ]));
             centered(frame, area, "Connect your GitHub account", lines);
@@ -196,11 +208,11 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
             ));
             lines.push(Line::from(""));
             lines.push(Line::from(vec![
-                "[enter] ".bold(),
+                crate::theme::key("[enter] "),
                 "connect with a one-time code  ".into(),
-                "[t] ".bold(),
+                crate::theme::key("[t] "),
                 "use a token  ".into(),
-                "[q] ".bold(),
+                crate::theme::key("[q] "),
                 "quit".into(),
             ]));
             centered(frame, area, "Connect your GitHub account", lines);
@@ -217,9 +229,9 @@ fn policy_setup(frame: &mut Frame, area: Rect) {
         ),
         Line::from(""),
         Line::from(vec![
-            "[e] ".bold(),
+            crate::theme::key("[e] "),
             "edit it in your editor  ".into(),
-            "[enter] ".bold(),
+            crate::theme::key("[enter] "),
             "continue".into(),
         ]),
     ];
@@ -306,38 +318,55 @@ fn repo_picker(app: &App, frame: &mut Frame, area: Rect, onboarding: bool) {
         None => frame.render_widget(Paragraph::new("  Loading repositories…").dim(), list),
     }
     let mut keys = vec![
-        "[/] ".bold(),
+        crate::theme::key("[/] "),
         "search  ".into(),
-        "[space] ".bold(),
+        crate::theme::key("[space] "),
         "watch/unwatch  ".into(),
-        "[n/p] ".bold(),
+        crate::theme::key("[n/p] "),
         "page  ".into(),
-        "[r] ".bold(),
+        crate::theme::key("[r] "),
         "refresh  ".into(),
     ];
     if onboarding {
-        keys.extend(["[enter] ".bold(), "done".into()]);
+        keys.extend([crate::theme::key("[enter] "), "done".into()]);
     }
     frame.render_widget(Line::from(keys), hints);
 }
 
 fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
     let [tabs, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
-    let titles = Tab::ALL
-        .iter()
-        .enumerate()
-        .map(|(i, t)| format!("{} {}", i + 1, t.title()));
+    let titles = Tab::ALL.iter().enumerate().map(|(i, t)| {
+        let mut spans = vec![
+            Span::styled(format!("{} ", i + 1), Style::default().fg(theme::MUTED)),
+            Span::raw(t.title()),
+        ];
+        // The queue tab shows how many PRs wait for you.
+        if *t == Tab::Queue
+            && let Some(n) = app.status.queue.filter(|n| *n > 0)
+        {
+            spans.push(Span::styled(
+                format!(" {n}"),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(theme::WARN)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        Line::from(spans)
+    });
     frame.render_widget(
         Tabs::new(titles)
             .select(Tab::ALL.iter().position(|t| *t == app.tab))
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            .divider(Span::styled("│", Style::default().fg(theme::MUTED)))
+            .highlight_style(theme::accent().add_modifier(Modifier::UNDERLINED)),
         tabs,
     );
-    let block = Block::bordered().title(format!(" {} ", app.tab.title()));
+    let block = Block::bordered()
+        .border_style(theme::border())
+        .title(Span::styled(
+            format!(" {} ", app.tab.title()),
+            theme::accent(),
+        ));
     let inner = block.inner(body);
     frame.render_widget(block, body);
     match app.tab {
@@ -352,23 +381,31 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
 
 fn status_bar(app: &App, frame: &mut Frame, area: Rect) {
     let s = &app.status;
-    let mut spans: Vec<Span> = Vec::new();
-    let sep = || " · ".dim();
-    spans.push(match &s.account {
-        Some(login) => Span::raw(format!(" @{login}")),
-        None => " not connected".dim(),
-    });
+    let bar = Style::default().bg(Color::Black);
+    let sep = || Span::styled(" │ ", Style::default().fg(theme::MUTED));
+    let mut spans: Vec<Span> = vec![match &s.account {
+        Some(login) => Span::styled(format!(" ● @{login}"), Style::default().fg(theme::GOOD)),
+        None => Span::styled(" ○ not connected", Style::default().fg(theme::BAD)),
+    }];
     if let Some(n) = s.watched {
-        spans.extend([sep(), Span::raw(format!("{n} watched"))]);
+        spans.extend([
+            sep(),
+            Span::styled(format!("{n} watched"), Style::default().fg(theme::ACCENT)),
+        ]);
     }
     if let Some(n) = s.queue {
         let text = format!("{n} awaiting you");
         spans.extend([
             sep(),
             if n > 0 {
-                text.yellow().bold()
+                Span::styled(
+                    text,
+                    Style::default()
+                        .fg(theme::WARN)
+                        .add_modifier(Modifier::BOLD),
+                )
             } else {
-                Span::raw(text)
+                Span::styled(text, Style::default().fg(theme::MUTED))
             },
         ]);
     }
@@ -376,46 +413,85 @@ fn status_bar(app: &App, frame: &mut Frame, area: Rect) {
         let mode = serde_json::to_value(p.mode)
             .ok()
             .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .replace('_', " ");
         spans.extend([
             sep(),
-            Span::raw(if p.holding {
-                format!("awake ({mode})")
+            if p.holding {
+                Span::styled(
+                    format!("☀ awake ({mode})"),
+                    Style::default().fg(theme::GOOD),
+                )
             } else {
-                format!("may sleep ({mode})")
-            }),
+                Span::styled(
+                    format!("☾ may sleep ({mode})"),
+                    Style::default().fg(theme::MUTED),
+                )
+            },
         ]);
     }
     if let Some(c) = &s.costs {
-        let text = match c.daily_budget_usd {
-            Some(b) => format!("${:.2} / ${b:.2} today", c.today_usd),
-            None => format!("${:.2} today", c.today_usd),
+        let (text, over) = match c.daily_budget_usd {
+            Some(b) => (
+                format!("${:.2} / ${b:.2} today", c.today_usd),
+                c.today_usd >= b,
+            ),
+            None => (format!("${:.2} today", c.today_usd), false),
         };
-        spans.extend([sep(), Span::raw(text)]);
+        let color = if over { theme::BAD } else { theme::MONEY };
+        spans.extend([sep(), Span::styled(text, Style::default().fg(color))]);
     }
-    spans.extend(["   ? help  q quit".dim()]);
-    frame.render_widget(Line::from(spans).reversed(), area);
+    spans.push(Span::raw("   "));
+    spans.extend(theme::hints("[?] help  [q] quit").spans);
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(bar), area);
 }
 
 fn help(frame: &mut Frame, area: Rect) {
     let lines = vec![
-        Line::from("Keys").bold(),
+        Line::from(Span::styled("Keys", theme::accent())),
         Line::from(""),
-        Line::from("  tab / shift-tab   next / previous tab"),
-        Line::from("  1–6               jump to a tab"),
-        Line::from("  ↑↓ or j k         move"),
-        Line::from("  /                 search (esc to finish)"),
-        Line::from("  space             watch / unwatch a repository"),
+        Line::from(vec![
+            theme::key("  tab / shift-tab"),
+            Span::raw("   next / previous tab"),
+        ]),
+        Line::from(vec![
+            theme::key("  1–6"),
+            Span::raw("               jump to a tab"),
+        ]),
+        Line::from(vec![theme::key("  ↑↓ or j k"), Span::raw("         move")]),
+        Line::from(vec![
+            theme::key("  /"),
+            Span::raw("                 search (esc to finish)"),
+        ]),
+        Line::from(vec![
+            theme::key("  space"),
+            Span::raw("             watch / unwatch a repository"),
+        ]),
         Line::from("  Queue tab: enter open · a approve · r request changes · d dismiss · o open"),
-        Line::from("             in a PR: ↑↓ scroll diff · ] [ next/previous file · esc back"),
+        Line::from(vec![
+            theme::key("  "),
+            Span::raw("           in a PR: ↑↓ scroll diff · ] [ next/previous file · esc back"),
+        ]),
         Line::from("  Feed tab: space pause/follow · f filter · c clear · p show polls"),
         Line::from("  History tab: enter details · o open on GitHub · f filter"),
         Line::from("  Policy tab: e edit · h history · r restore · n new override"),
-        Line::from("              x delete override · t dry-run a PR · esc back"),
-        Line::from("  n / p             next / previous page"),
-        Line::from("  r                 refresh or retry"),
-        Line::from("  ?                 this help"),
-        Line::from("  q, ctrl-c         quit"),
+        Line::from(vec![
+            theme::key("  "),
+            Span::raw("            x delete override · t dry-run a PR · esc back"),
+        ]),
+        Line::from(vec![
+            theme::key("  n / p"),
+            Span::raw("             next / previous page"),
+        ]),
+        Line::from(vec![
+            theme::key("  r"),
+            Span::raw("                 refresh or retry"),
+        ]),
+        Line::from(vec![
+            theme::key("  ?"),
+            Span::raw("                 this help"),
+        ]),
+        Line::from(vec![theme::key("  q, ctrl-c"), Span::raw("         quit")]),
         Line::from(""),
         Line::from("  press any key to close").dim(),
     ];
@@ -428,5 +504,9 @@ fn help(frame: &mut Frame, area: Rect) {
         height: height.min(area.height),
     };
     frame.render_widget(Clear, popup);
-    frame.render_widget(Paragraph::new(lines).block(Block::bordered()), popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(Block::bordered().border_style(Style::default().fg(theme::ACCENT))),
+        popup,
+    );
 }

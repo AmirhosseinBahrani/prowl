@@ -14,6 +14,7 @@ mod queue_ui;
 pub mod runtime;
 pub mod settings_tab;
 mod settings_ui;
+pub mod theme;
 pub mod ui;
 
 pub use runtime::{Editor, Input, Opener, Options, run};

@@ -70,7 +70,9 @@ pub fn draw(tab: &SettingsTab, frame: &mut Frame, area: Rect) {
     } else if tab.editing.is_some() {
         Line::from(" enter save · esc cancel".dim())
     } else {
-        Line::from(" ↑↓ select · [enter] change · [a] add file rule · [x] remove file rule".dim())
+        crate::theme::hints(
+            " ↑↓ select · [enter] change · [a] add file rule · [x] remove file rule",
+        )
     };
     frame.render_widget(line, footer);
 }
