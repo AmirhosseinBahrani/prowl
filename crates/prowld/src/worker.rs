@@ -509,6 +509,7 @@ impl Worker {
             attempts: 1,
             error: None,
             created_at_ms: crate::events::now_ms(),
+            kind: crate::jobs::kinds::RERUN.into(),
         };
         let settings = inner.settings.get();
         let changed_lines = pr.additions + pr.deletions;
@@ -698,6 +699,7 @@ impl Worker {
             policy_scope,
             policy_version_id,
             agent_verdicts: inner.settings.get().agent_verdicts,
+            run: job.manual().then_some(job.id),
         };
         self.record(
             job,

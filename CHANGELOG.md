@@ -6,7 +6,11 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
-## [0.1.4] - 2026-10-17
+### Added
+
+- **Review again**: `R` in the Queue, Reviews and History tabs (or `prowl rerun owner/repo#N`)
+  reviews a pull request again at its current commit and posts a fresh review — even after
+  PRowl reviewed it, when GitHub no longer lists you as a requested reviewer.
 
 ### Changed
 
@@ -14,6 +18,8 @@ All notable changes to PRowl are documented here. The format is based on
   finding, on the line it's about — instead of inside one long comment. The "⏳ Waiting for
   human approval" comment keeps the reasons and links to the threads; findings that aren't on a
   changed line stay in the comment.
+
+## [0.1.4] - 2026-10-17
 
 ### Changed
 

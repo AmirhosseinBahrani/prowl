@@ -169,6 +169,7 @@ impl ReviewsTab {
                 return self.refresh_transcript();
             }
             KeyCode::Char('o') => return self.open_on_github(None),
+            KeyCode::Char('R') => return self.rerun(None),
             KeyCode::Char('r') => return self.refresh(),
             _ => {}
         }
@@ -203,9 +204,28 @@ impl ReviewsTab {
                 let job_id = open.job_id;
                 return self.open_on_github(Some(job_id));
             }
+            KeyCode::Char('R') => {
+                let job_id = open.job_id;
+                return self.rerun(Some(job_id));
+            }
             _ => {}
         }
         vec![]
+    }
+
+    /// Reviews the selected (or open) job's PR again.
+    fn rerun(&self, job_id: Option<i64>) -> Vec<Cmd> {
+        let job = match job_id {
+            Some(id) => self.job(id),
+            None => self.ordered().get(self.selected).copied(),
+        };
+        job.map(|j| {
+            vec![Cmd::Rerun {
+                repo: j.repo.clone(),
+                pr: j.pr_number,
+            }]
+        })
+        .unwrap_or_default()
     }
 
     /// Opens what PRowl posted, or else the PR.
@@ -252,6 +272,7 @@ mod tests {
             attempts: 1,
             error: None,
             created_at_ms: 0,
+            kind: "review".into(),
         }
     }
 

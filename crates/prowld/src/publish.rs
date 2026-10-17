@@ -51,6 +51,9 @@ pub(crate) struct Target<'a> {
     pub policy_version_id: i64,
     /// Post Claude's recommendation as the verdict of agent-only reviews.
     pub agent_verdicts: bool,
+    /// The job, for runs the user asked for: a commit can then be reviewed more than once, and
+    /// each run's posts are told apart by it.
+    pub run: Option<i64>,
 }
 
 /// The review event for an agent-only review: Claude's recommendation when agent verdicts are
@@ -65,8 +68,12 @@ pub(crate) fn agent_event(target: &Target<'_>, review: &ReviewOutput) -> &'stati
 }
 
 pub(crate) fn marker(target: &Target<'_>) -> String {
+    let run = target
+        .run
+        .map(|id| format!(" run={id}"))
+        .unwrap_or_default();
     format!(
-        "<!-- prowl:review pr={}#{} sha={} -->",
+        "<!-- prowl:review pr={}#{} sha={}{run} -->",
         target.repo, target.number, target.head_sha
     )
 }

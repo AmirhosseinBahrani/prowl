@@ -119,6 +119,7 @@ pub enum Msg {
     RecentEvents(Result<Vec<Event>, String>),
     Reviews(Result<Vec<prowld::Review>, String>),
     Jobs(Result<Vec<prowld::Job>, String>),
+    Rerun(Result<prowld::Job, String>),
     /// The transcript of this job.
     Transcript(
         i64,
@@ -191,6 +192,11 @@ pub enum Cmd {
     LoadRecentEvents,
     LoadReviews,
     LoadJobs,
+    /// Review this PR again at its current commit.
+    Rerun {
+        repo: String,
+        pr: u64,
+    },
     LoadTranscript {
         job_id: i64,
     },
@@ -449,6 +455,17 @@ impl App {
                 vec![]
             }
             Msg::Jobs(Ok(jobs)) => self.reviews.on_jobs(jobs),
+            Msg::Rerun(Ok(job)) => {
+                self.notice = Some(format!(
+                    "Re-reviewing {}#{} — follow it in the Reviews tab (3).",
+                    job.repo, job.pr_number
+                ));
+                self.reviews.refresh()
+            }
+            Msg::Rerun(Err(e)) => {
+                self.notice = Some(format!("Couldn't re-review: {e}"));
+                vec![]
+            }
             Msg::Jobs(Err(e)) => {
                 self.reviews.on_jobs_failed();
                 self.notice = Some(e);

@@ -75,7 +75,7 @@ curl --unix-socket "$HOME/Library/Application Support/dev.prowl.prowl/prowld.soc
 | `GET/PUT /v1/settings` | Settings |
 | `GET /v1/jobs`, `GET /v1/jobs/{id}/transcript` | Reviews, and each one's full record: context and prompt, Claude's messages and tool calls, answer, decision, what was posted |
 | `GET /v1/reviews`, `GET /v1/costs`, `GET /v1/power`, `GET /v1/doctor` | Introspection |
-| `POST /v1/poll`, `POST /v1/dry-run` | Poll now, dry-run a PR |
+| `POST /v1/poll`, `POST /v1/dry-run`, `POST /v1/rerun` | Poll now, dry-run a PR, review a PR again |
 
 The API is for local tools and is not yet considered stable.
 

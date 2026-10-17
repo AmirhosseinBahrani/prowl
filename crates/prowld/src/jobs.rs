@@ -18,6 +18,27 @@ pub struct Job {
     pub attempts: i64,
     pub error: Option<String>,
     pub created_at_ms: i64,
+    /// `review` (found by polling), `rerun` (asked for) or `verify`.
+    #[serde(default = "review_kind")]
+    pub kind: String,
+}
+
+fn review_kind() -> String {
+    "review".into()
+}
+
+pub mod kinds {
+    pub const REVIEW: &str = "review";
+    pub const RERUN: &str = "rerun";
+    pub const VERIFY: &str = "verify";
+}
+
+impl Job {
+    /// Asked for by the user rather than found by polling: it runs even if PRowl is no longer
+    /// a requested reviewer (posting a review clears the request).
+    pub fn manual(&self) -> bool {
+        self.kind != kinds::REVIEW
+    }
 }
 
 /// A pull request at a specific commit, ready to be queued.
@@ -42,6 +63,7 @@ type JobRow = (
     i64,
     Option<String>,
     i64,
+    String,
 );
 
 fn from_row(r: JobRow) -> Job {
@@ -57,6 +79,7 @@ fn from_row(r: JobRow) -> Job {
         attempts: r.8,
         error: r.9,
         created_at_ms: r.10,
+        kind: r.11,
     }
 }
 
@@ -77,7 +100,7 @@ impl Jobs {
             "INSERT INTO jobs (repo, pr_number, head_sha, title, author, html_url,
                                next_run_at_ms, created_at_ms, updated_at_ms)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (repo, pr_number, head_sha) DO NOTHING",
+             ON CONFLICT (repo, pr_number, head_sha) WHERE kind = 'review' DO NOTHING",
         )
         .bind(job.repo)
         .bind(job.pr_number as i64)
@@ -93,6 +116,42 @@ impl Jobs {
         Ok((result.rows_affected() == 1).then(|| result.last_insert_rowid()))
     }
 
+    /// Queues a job the user asked for (`kinds::RERUN` or `kinds::VERIFY`), even if this
+    /// commit was reviewed before. Returns the new job's id.
+    pub(crate) async fn enqueue_manual(&self, job: &NewJob<'_>, kind: &str) -> anyhow::Result<i64> {
+        let now = events::now_ms();
+        Ok(sqlx::query(
+            "INSERT INTO jobs (repo, pr_number, head_sha, title, author, html_url,
+                               next_run_at_ms, created_at_ms, updated_at_ms, kind)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(job.repo)
+        .bind(job.pr_number as i64)
+        .bind(job.head_sha)
+        .bind(job.title)
+        .bind(job.author)
+        .bind(job.html_url)
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .bind(kind)
+        .execute(&self.db)
+        .await?
+        .last_insert_rowid())
+    }
+
+    pub(crate) async fn get(&self, id: i64) -> anyhow::Result<Option<Job>> {
+        let row: Option<JobRow> = sqlx::query_as(
+            "SELECT id, repo, pr_number, head_sha, title, author, html_url, status, attempts,
+                    error, created_at_ms, kind
+             FROM jobs WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(row.map(from_row))
+    }
+
     pub(crate) async fn exists(
         &self,
         repo: &str,
@@ -100,7 +159,7 @@ impl Jobs {
         head_sha: &str,
     ) -> anyhow::Result<bool> {
         let found: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM jobs WHERE repo = ? AND pr_number = ? AND head_sha = ?",
+            "SELECT id FROM jobs WHERE repo = ? AND pr_number = ? AND head_sha = ? AND kind = 'review'",
         )
         .bind(repo)
         .bind(pr_number as i64)
@@ -118,7 +177,7 @@ impl Jobs {
              WHERE id = (SELECT id FROM jobs WHERE status IN ('queued', 'interrupted')
                          AND next_run_at_ms <= ? ORDER BY id LIMIT 1)
              RETURNING id, repo, pr_number, head_sha, title, author, html_url, status, attempts,
-                       error, created_at_ms",
+                       error, created_at_ms, kind",
         )
         .bind(now)
         .bind(now)
@@ -191,7 +250,7 @@ impl Jobs {
     pub(crate) async fn list(&self) -> anyhow::Result<Vec<Job>> {
         let rows: Vec<JobRow> = sqlx::query_as(
             "SELECT id, repo, pr_number, head_sha, title, author, html_url, status, attempts,
-                        error, created_at_ms
+                        error, created_at_ms, kind
                  FROM jobs ORDER BY id DESC LIMIT 500",
         )
         .fetch_all(&self.db)

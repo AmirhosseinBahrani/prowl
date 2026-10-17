@@ -165,6 +165,7 @@ prowl queue                                   # what's waiting for you
 prowl approve acme/api#412 -m "Looks good"    # approve on GitHub, as you
 prowl request-changes acme/api#412 -m "Add tests for the new path"
 prowl dismiss acme/api#412
+prowl rerun acme/api#412                      # review it again at its current commit
 prowld status                                 # daemon state as JSON
 prowld login [--token]                        # connect GitHub (device flow, or a token on stdin)
 prowld logout

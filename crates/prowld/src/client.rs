@@ -165,6 +165,13 @@ impl ApiClient {
     }
 
     /// Polls GitHub for review requests now and returns what happened.
+    /// Reviews `repo#pr` again at its current commit; returns the queued job.
+    pub async fn rerun(&self, repo: &str, pr: u64) -> Result<Job, ClientError> {
+        let body = serde_json::json!({ "repo": repo, "pr": pr });
+        self.call_json_body(Method::POST, "/v1/rerun", Some(body))
+            .await
+    }
+
     pub async fn poll_now(&self) -> Result<PollSummary, ClientError> {
         self.call_json(Method::POST, "/v1/poll").await
     }

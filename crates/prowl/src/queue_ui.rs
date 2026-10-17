@@ -91,11 +91,11 @@ fn footer_line(tab: &QueueTab) -> Line<'static> {
     }
     if tab.detail.is_some() {
         crate::theme::hints(
-            " [a] approve · [r] request changes · [d] dismiss · [o] open · ↑↓ scroll · ] [ file · [esc] back",
+            " [a] approve · [r] request changes · [d] dismiss · [o] open · [R] re-review · ↑↓ ] [ · [esc] back",
         )
     } else {
         crate::theme::hints(
-            " [enter] open · [a] approve · [r] request changes · [d] dismiss · [o] open on GitHub",
+            " [enter] open · [a] approve · [r] request changes · [d] dismiss · [o] open on GitHub · [R] re-review",
         )
     }
 }
