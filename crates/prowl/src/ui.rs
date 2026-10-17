@@ -122,6 +122,30 @@ fn doctor(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn login(app: &App, frame: &mut Frame, area: Rect) {
+    if let Some(token) = &app.token_input {
+        let mut lines = vec![
+            Line::from("Paste a personal access token with the repo and read:org scopes."),
+            Line::from("PRowl checks it with GitHub, then keeps it in your OS keychain."),
+            Line::from(""),
+            Line::from(vec![
+                "token: ".bold(),
+                Span::raw(format!("{}▏", "•".repeat(token.chars().count()))),
+            ]),
+            Line::from(""),
+        ];
+        if let Some(error) = &app.login_error {
+            lines.push(Line::from(error.clone()).red());
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(vec![
+            "[enter] ".bold(),
+            "sign in  ".into(),
+            "[esc] ".bold(),
+            "back".into(),
+        ]));
+        centered(frame, area, "Sign in with a token", lines);
+        return;
+    }
     match &app.auth {
         Some(AuthState::Pending {
             user_code,
@@ -144,6 +168,10 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
                 "[o] ".bold(),
                 "open it in your browser · waiting for GitHub…".dim(),
             ]));
+            lines.push(Line::from(vec![
+                "[t] ".bold(),
+                "use a personal access token instead".dim(),
+            ]));
             centered(frame, area, "Connect your GitHub account", lines);
         }
         other => {
@@ -160,6 +188,9 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
                 }
                 _ => {}
             }
+            if let Some(error) = &app.login_error {
+                lines.push(Line::from(error.clone()).red());
+            }
             lines.push(Line::from(
                 "PRowl reviews pull requests where you're a requested reviewer.",
             ));
@@ -167,6 +198,8 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
             lines.push(Line::from(vec![
                 "[enter] ".bold(),
                 "connect with a one-time code  ".into(),
+                "[t] ".bold(),
+                "use a token  ".into(),
                 "[q] ".bold(),
                 "quit".into(),
             ]));

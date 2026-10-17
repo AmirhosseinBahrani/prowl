@@ -2,6 +2,7 @@
 class Prowl < Formula
   desc "Reviews GitHub pull requests around the clock with your local claude CLI"
   homepage "https://github.com/AmirhosseinBahrani/prowl"
+  license any_of: ["MIT", "Apache-2.0"]
   version "{{VERSION}}"
 
   on_macos do

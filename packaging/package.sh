@@ -58,7 +58,7 @@ Name: prowl
 Version: $version
 Release: 1
 Summary: Reviews GitHub pull requests around the clock with your local claude CLI
-License: Proprietary
+License: MIT OR Apache-2.0
 Requires: git, dbus-libs
 %description
 PRowl watches the repositories you choose for pull requests where you are a requested

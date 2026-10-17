@@ -76,6 +76,13 @@ impl ApiClient {
         self.call_json(Method::POST, "/v1/auth/device").await
     }
 
+    /// Connects with a personal access token; GitHub must accept it.
+    pub async fn sign_in_with_token(&self, token: &str) -> Result<AuthState, ClientError> {
+        let body = serde_json::json!({ "token": token });
+        self.call_json_body(Method::POST, "/v1/auth/token", Some(body))
+            .await
+    }
+
     pub async fn disconnect(&self) -> Result<AuthState, ClientError> {
         self.call_json(Method::DELETE, "/v1/auth").await
     }

@@ -5,7 +5,11 @@ members = ["crates/prowld", "crates/prowl", "crates/e2e"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "UNLICENSED"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+authors = ["Amirhossein Bahrani", "PRowl contributors"]
+repository = "https://github.com/AmirhosseinBahrani/prowl"
+homepage = "https://github.com/AmirhosseinBahrani/prowl"
 publish = false
 
 [workspace.dependencies]
@@ -28,6 +32,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 qrcode = { version = "0.14", default-features = false }
 rand = "0.9"
 ratatui = "0.30"
+rpassword = "7"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 similar = "3"
 serde = { version = "1", features = ["derive"] }

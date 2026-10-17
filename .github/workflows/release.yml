@@ -9,6 +9,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # The public client id of the project's GitHub OAuth App (a repository variable, not a secret:
+  # device-flow client ids are not confidential). Built into the binaries as the default.
+  PROWL_GITHUB_CLIENT_ID: ${{ vars.PROWL_GITHUB_CLIENT_ID }}
 
 jobs:
   build:

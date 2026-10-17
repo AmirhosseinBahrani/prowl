@@ -60,6 +60,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/events/recent", get(recent_events))
         .route("/v1/auth", get(auth_state).delete(disconnect))
         .route("/v1/auth/device", post(start_device_flow))
+        .route("/v1/auth/token", post(sign_in_with_token))
         .route("/v1/poll", post(poll_now))
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/reviews", get(list_reviews))
@@ -207,11 +208,33 @@ async fn auth_state(State(state): State<AppState>) -> Json<AuthState> {
 async fn start_device_flow(State(state): State<AppState>) -> Result<Json<AuthState>, ApiError> {
     match state.auth.start_device_flow().await {
         Ok(pending) => Ok(Json(pending)),
-        Err(e @ AuthError::NoClientId) => {
-            Err(ApiError(StatusCode::PRECONDITION_FAILED, e.to_string()))
-        }
-        Err(e @ AuthError::GitHub(_)) => Err(ApiError(StatusCode::BAD_GATEWAY, e.to_string())),
-        Err(AuthError::Internal(e)) => Err(ApiError::internal(e)),
+        Err(e) => Err(auth_error(e)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct TokenSignIn {
+    token: String,
+}
+
+async fn sign_in_with_token(
+    State(state): State<AppState>,
+    Json(body): Json<TokenSignIn>,
+) -> Result<Json<AuthState>, ApiError> {
+    state
+        .auth
+        .sign_in_with_token(&body.token)
+        .await
+        .map(Json)
+        .map_err(auth_error)
+}
+
+fn auth_error(e: AuthError) -> ApiError {
+    match e {
+        AuthError::NoClientId => ApiError(StatusCode::PRECONDITION_FAILED, e.to_string()),
+        AuthError::InvalidToken => ApiError(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()),
+        AuthError::GitHub(_) => ApiError(StatusCode::BAD_GATEWAY, e.to_string()),
+        AuthError::Internal(e) => ApiError::internal(e),
     }
 }
 
