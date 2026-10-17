@@ -424,11 +424,10 @@ impl Poller {
     }
 
     async fn rate_limited(&self) -> anyhow::Result<bool> {
-        let limit = self.inner.github.rate_limit();
-        let Some(reset_at) = self.inner.github.paused_until() else {
+        let Some(pause) = self.inner.github.rate_pause() else {
             return Ok(false);
         };
-        let remaining = limit.remaining.unwrap_or(0);
+        let reset_at = pause.reset_at;
         let mut reported = self.inner.rate_limit_reported.lock().await;
         if *reported != Some(reset_at) {
             *reported = Some(reset_at);
@@ -436,7 +435,11 @@ impl Poller {
                 .events
                 .emit(
                     kind::RATE_LIMITED,
-                    serde_json::json!({ "remaining": remaining, "reset_at": reset_at }),
+                    serde_json::json!({
+                        "remaining": pause.remaining,
+                        "reset_at": reset_at,
+                        "resource": pause.resource,
+                    }),
                 )
                 .await?;
         }

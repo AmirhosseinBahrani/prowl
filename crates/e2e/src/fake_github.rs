@@ -40,6 +40,8 @@ struct Inner {
     query_routes: Vec<(Method, String, String, (StatusCode, serde_json::Value))>,
     /// `(remaining, reset_at)` sent as X-RateLimit headers on every response.
     rate_limit: Option<(u64, u64)>,
+    /// `(limit, remaining, reset_at)` for `/search/*`, reported as the `search` resource.
+    search_rate_limit: Option<(u64, u64, u64)>,
     /// Unified diffs served for `Accept: application/vnd.github.diff`, by path.
     diffs: HashMap<String, String>,
     requests: Vec<RecordedRequest>,
@@ -120,6 +122,11 @@ impl FakeGitHub {
         self.inner.lock().unwrap().rate_limit = Some((remaining, reset_at));
     }
 
+    /// Reports this limit, as GitHub's separate `search` resource, on search responses.
+    pub fn set_search_rate_limit(&self, limit: u64, remaining: u64, reset_at: u64) {
+        self.inner.lock().unwrap().search_rate_limit = Some((limit, remaining, reset_at));
+    }
+
     pub fn requests_to(&self, method: Method, path: &str) -> Vec<RecordedRequest> {
         self.requests()
             .into_iter()
@@ -153,6 +160,7 @@ async fn handle(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
         .await
         .unwrap_or_default();
 
+    let is_search = path.starts_with("/search/");
     let mut inner = inner.lock().unwrap();
     if headers.get("accept").map(String::as_str) == Some("application/vnd.github.diff")
         && let Some(diff) = inner.diffs.get(&path).cloned()
@@ -215,9 +223,19 @@ async fn handle(State(inner): State<Arc<Mutex<Inner>>>, req: Request) -> Respons
     };
     let response_headers = response.headers_mut();
     response_headers.insert("etag", etag.parse().expect("valid header"));
-    if let Some((remaining, reset_at)) = inner.rate_limit {
-        response_headers.insert("x-ratelimit-remaining", remaining.into());
-        response_headers.insert("x-ratelimit-reset", reset_at.into());
+    match inner.search_rate_limit {
+        Some((limit, remaining, reset_at)) if is_search => {
+            response_headers.insert("x-ratelimit-resource", "search".parse().expect("valid"));
+            response_headers.insert("x-ratelimit-limit", limit.into());
+            response_headers.insert("x-ratelimit-remaining", remaining.into());
+            response_headers.insert("x-ratelimit-reset", reset_at.into());
+        }
+        _ => {
+            if let Some((remaining, reset_at)) = inner.rate_limit {
+                response_headers.insert("x-ratelimit-remaining", remaining.into());
+                response_headers.insert("x-ratelimit-reset", reset_at.into());
+            }
+        }
     }
     response
 }

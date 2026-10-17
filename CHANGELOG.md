@@ -6,6 +6,12 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- PRowl no longer pauses with "GitHub rate limit nearly used up" after ordinary polls. GitHub's
+  search limit (30 a minute) was mistaken for the main API limit (5000 an hour); limits are now
+  tracked separately, and the Feed says which one is low and when it resets.
+
 ## [0.1.1] - 2026-10-17
 
 ### Fixed
