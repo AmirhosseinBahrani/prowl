@@ -800,6 +800,10 @@ impl Worker {
     /// is posted). `None` if the job isn't waiting or running.
     pub(crate) async fn cancel(&self, id: i64) -> anyhow::Result<Option<Cancelled>> {
         if let Some(token) = self.inner.running.lock().unwrap().get(&id) {
+            // A job already being cancelled is no longer "running" for a second request.
+            if token.is_cancelled() {
+                return Ok(None);
+            }
             token.cancel();
             return Ok(Some(Cancelled::Running));
         }
