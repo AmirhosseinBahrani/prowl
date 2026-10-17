@@ -34,6 +34,7 @@ mod store;
 mod tools;
 pub mod transcripts;
 pub mod transport;
+pub mod updates;
 pub mod worker;
 mod workspace;
 

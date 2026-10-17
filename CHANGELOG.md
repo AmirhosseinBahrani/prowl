@@ -8,6 +8,9 @@ All notable changes to PRowl are documented here. The format is based on
 
 ### Added
 
+- PRowl checks for a newer release every 6 hours; the TUI's bottom bar shows
+  `⬆ vX.Y.Z available` and `?` shows the command to update (re-running the installer). Turn it off
+  with `PROWL_UPDATE_REPO=` (empty).
 - **Agent verdicts** (Settings → "Agent approves / requests changes on low-risk PRs", off by
   default): on PRs that don't need a human, the agent's review approves or requests changes as
   Claude recommends, instead of only commenting. If a newer commit needs a human, PRowl

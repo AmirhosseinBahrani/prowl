@@ -768,3 +768,30 @@ async fn a_resize_redraws_straight_away() {
     tui.quit().await;
     h.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_newer_release_is_suggested_in_the_status_bar() {
+    let mut h = Harness::start().await.unwrap();
+    h.connect_github("octo").await.unwrap();
+    repos(&h);
+    h.client().repos(&RepoQuery::default()).await.unwrap();
+    h.client().watch("acme/api").await.unwrap();
+    h.github.route(
+        Method::GET,
+        "/repos/acme/prowl/releases/latest",
+        StatusCode::OK,
+        json!({ "tag_name": "v99.0.0", "html_url": "https://github.com/acme/prowl/releases/tag/v99.0.0" }),
+    );
+    h.restart_with(|c| {
+        c.update_repo = Some("acme/prowl".into());
+        c.update_check_retry = Duration::from_millis(50);
+    })
+    .await
+    .unwrap();
+
+    let tui = Tui::of(&h);
+
+    tui.wait_for("⬆ v99.0.0 available").await;
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}

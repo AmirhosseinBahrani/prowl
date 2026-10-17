@@ -244,6 +244,13 @@ const PER_PAGE: usize = 100;
 /// Below this many remaining API calls, background work pauses until the limit resets.
 const MIN_RATE_REMAINING: u64 = 50;
 
+/// A published release.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Release {
+    pub tag_name: String,
+    pub html_url: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct User {
     pub login: String,
@@ -316,6 +323,22 @@ impl GitHub {
 
     pub(crate) async fn current_user(&self, token: &str) -> Result<User, GitHubError> {
         self.get_json(token, "/user", &[]).await
+    }
+
+    /// The repository's latest published release, if it has one.
+    pub(crate) async fn latest_release(
+        &self,
+        token: &str,
+        repo: &str,
+    ) -> Result<Option<Release>, GitHubError> {
+        match self
+            .get_json(token, &format!("/repos/{repo}/releases/latest"), &[])
+            .await
+        {
+            Ok(release) => Ok(Some(release)),
+            Err(GitHubError::Status { status, .. }) if status == StatusCode::NOT_FOUND => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Every repository the account owns, collaborates on, or can see through an organisation.

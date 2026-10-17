@@ -442,10 +442,28 @@ fn status_bar(app: &App, frame: &mut Frame, area: Rect) {
         let color = if over { theme::BAD } else { theme::MONEY };
         spans.extend([sep(), Span::styled(text, Style::default().fg(color))]);
     }
+    if let Some(update) = s.update.as_ref().filter(|u| u.available) {
+        spans.extend([
+            sep(),
+            Span::styled(
+                format!("⬆ {} available — rerun the installer ([?])", update.latest),
+                Style::default()
+                    .fg(theme::WARN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+    }
     spans.push(Span::raw("   "));
     spans.extend(theme::hints("[?] help  [q] quit").spans);
     frame.render_widget(Paragraph::new(Line::from(spans)).style(bar), area);
 }
+
+/// Re-running the installer upgrades PRowl in place and restarts the service.
+const UPDATE_COMMAND: &str = if cfg!(windows) {
+    "irm https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/install.ps1 | iex"
+} else {
+    "curl -fsSL https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/install.sh | sh"
+};
 
 fn help(frame: &mut Frame, area: Rect) {
     let lines = vec![
@@ -469,6 +487,7 @@ fn help(frame: &mut Frame, area: Rect) {
             Span::raw("             watch / unwatch a repository"),
         ]),
         Line::from("  Queue tab: enter open · a approve · r request changes · d dismiss · o open"),
+        Line::from(format!("  Update PRowl: {}", UPDATE_COMMAND)),
         Line::from(vec![
             theme::key("  "),
             Span::raw("           in a PR: ↑↓ scroll diff · ] [ next/previous file · esc back"),

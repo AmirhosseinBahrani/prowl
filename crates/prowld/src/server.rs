@@ -31,6 +31,7 @@ pub(crate) struct AppState {
     pub jobs: Jobs,
     pub reviews: Reviews,
     pub transcripts: crate::transcripts::Transcripts,
+    pub updates: crate::updates::Updates,
     pub settings: crate::settings::SettingsStore,
     pub power: Power,
     pub claude: std::sync::Arc<crate::claude::Claude>,
@@ -52,6 +53,9 @@ pub struct Status {
     pub started_at_ms: i64,
     pub uptime_secs: u64,
     pub github: AuthState,
+    /// The latest release, once checked.
+    #[serde(default)]
+    pub update: Option<crate::updates::UpdateInfo>,
 }
 
 pub(crate) fn router(state: AppState) -> Router {
@@ -101,6 +105,7 @@ async fn status(State(state): State<AppState>) -> Json<Status> {
         started_at_ms: state.started_at_ms,
         uptime_secs: state.started.elapsed().as_secs(),
         github: state.auth.state().await,
+        update: state.updates.get(),
     })
 }
 

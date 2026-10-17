@@ -85,6 +85,8 @@ pub struct StatusBar {
     pub queue: Option<usize>,
     pub power: Option<PowerStatus>,
     pub costs: Option<Costs>,
+    /// The latest PRowl release, as the daemon last checked it.
+    pub update: Option<prowld::updates::UpdateInfo>,
 }
 
 /// Results of work the runtime did for us.
@@ -551,7 +553,8 @@ impl App {
                 || kind.starts_with("queue.")
                 || kind.starts_with("review.")
                 || kind.starts_with("power.")
-                || kind.starts_with("budget.") =>
+                || kind.starts_with("budget.")
+                || kind.starts_with("update.") =>
             {
                 vec![Cmd::LoadStatusBar]
             }
@@ -916,6 +919,7 @@ mod tests {
             started_at_ms: 0,
             uptime_secs: 0,
             github: AuthState::Disconnected,
+            update: None,
         };
         assert_eq!(
             app.update(Msg::Connected(Ok(status))),

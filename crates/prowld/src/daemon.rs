@@ -180,6 +180,20 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         .unwrap_or_else(|| Arc::new(crate::notify::Desktop));
     crate::notify::spawn(&events, notifier, settings.clone(), shutdown.clone());
 
+    let updates = crate::updates::Updates::default();
+    if let Some(repo) = &config.update_repo {
+        updates.spawn(
+            github.clone(),
+            auth.clone(),
+            events.clone(),
+            crate::updates::CheckSettings {
+                repo: repo.clone(),
+                interval: config.update_check_interval,
+                retry: config.update_check_retry,
+            },
+            shutdown.clone(),
+        );
+    }
     let state = AppState {
         auth: auth.clone(),
         policies,
@@ -187,6 +201,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         jobs,
         reviews,
         transcripts: crate::transcripts::Transcripts::new(db.clone()),
+        updates: updates.clone(),
         settings,
         power,
         claude: std::sync::Arc::new(claude_for(&config)),

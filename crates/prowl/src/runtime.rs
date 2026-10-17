@@ -288,11 +288,19 @@ async fn status_bar(client: &ApiClient) -> StatusBar {
         client.power(),
         client.costs(),
     );
+    let (account, update) = match status {
+        Ok(status) => (
+            match status.github {
+                AuthState::Connected { login, .. } => Some(login),
+                _ => None,
+            },
+            status.update,
+        ),
+        Err(_) => (None, None),
+    };
     StatusBar {
-        account: match status.ok().map(|s| s.github) {
-            Some(AuthState::Connected { login, .. }) => Some(login),
-            _ => None,
-        },
+        account,
+        update,
         watched: watched.ok().map(|r| r.len()),
         queue: queue.ok().map(|q| q.len()),
         power: power.ok(),

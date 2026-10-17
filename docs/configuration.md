@@ -80,6 +80,15 @@ Override it with `--home <dir>` or `PROWL_HOME` (both `prowl` and `prowld` accep
 |---|---|---|
 | `PROWL_HOME` | `prowl`, `prowld` | PRowl home directory |
 | `PROWL_GITHUB_CLIENT_ID` | `prowld` | OAuth App client id (overrides the file and the built-in one) |
+| `PROWL_UPDATE_REPO` | `prowld` | Where to look for newer releases (default `AmirhosseinBahrani/prowl`); set it empty to turn the update check off |
 | `RUST_LOG` | `prowld` | Log filter, e.g. `prowld=debug` |
 | `VISUAL`, `EDITOR` | `prowl` | Editor for policies |
 | `NO_COLOR` | `prowl` | Disable colours in the TUI |
+
+## Updates
+
+Every 6 hours (and soon after you connect GitHub) the daemon asks GitHub for PRowl's latest
+release — one small request with your token, nothing else is sent. When a newer version exists,
+the TUI's bottom bar shows `⬆ vX.Y.Z available` and the Feed says so once. To update, run the
+installer again (press `?` in the TUI for the exact command); it replaces the binaries and
+restarts the background service. Set `PROWL_UPDATE_REPO` to an empty value to turn the check off.
