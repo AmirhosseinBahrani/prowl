@@ -236,7 +236,9 @@ impl Worker {
                     .output
                     .as_ref()
                     .ok_or(stored.invalid_reason.as_deref().unwrap_or("invalid output"));
-                if job.kind == crate::jobs::kinds::VERIFY {
+                // A verification that escalated was stored with its reasons and is published
+                // like any review that needs a human.
+                if job.kind == crate::jobs::kinds::VERIFY && stored.decision_reasons.is_empty() {
                     let checked = inner
                         .reviews
                         .latest_valid_for_pr(&job.repo, job.pr_number, job.id)
@@ -271,8 +273,12 @@ impl Worker {
         }
         let settings = inner.settings.get();
         let changed_lines = pr.additions + pr.deletions;
-        // A verification was asked for after a review: no size limit turns it into a comment.
-        if job.kind != crate::jobs::kinds::VERIFY
+        // A PR waiting in the Human Review Queue is verified only because the user asked: the
+        // approval is theirs to request. Anything else goes through every policy gate again,
+        // since the fixes are new code.
+        let verify_for_human = job.kind == crate::jobs::kinds::VERIFY
+            && inner.queue.is_pending(&job.repo, job.pr_number).await?;
+        if !verify_for_human
             && (changed_lines > settings.max_changed_lines
                 || pr.changed_files > settings.max_changed_files)
         {
@@ -348,20 +354,6 @@ impl Worker {
         };
         self.emit(kind::FINISHED, job, details).await;
 
-        if let Some(verify) = &verify {
-            return self
-                .finish_verification(
-                    job,
-                    &token,
-                    &reviewer,
-                    review_id,
-                    &policy,
-                    output.as_ref().map_err(String::as_str),
-                    verify.previous.len(),
-                )
-                .await;
-        }
-
         let rule_ids: Vec<String> = policy.rules.iter().map(|r| r.id.clone()).collect();
         let mut verdict = decider::decide(
             output.as_ref().map_err(String::as_str),
@@ -374,6 +366,24 @@ impl Worker {
         if let Some(rule) = file_rule {
             verdict.decision = Decision::NeedsHuman;
             verdict.reasons.insert(0, rule);
+        }
+        // A verification approves only what the policy would leave to the agent (or what the
+        // user asked to approve, for a PR waiting on them). If the fixes now need a human, the
+        // result is published like any review that needs one: threads, comment, queue.
+        if let Some(verify) = &verify
+            && (verify_for_human || verdict.decision == Decision::AgentOnly)
+        {
+            return self
+                .finish_verification(
+                    job,
+                    &token,
+                    &reviewer,
+                    review_id,
+                    &policy,
+                    output.as_ref().map_err(String::as_str),
+                    verify.previous.len(),
+                )
+                .await;
         }
         inner
             .reviews

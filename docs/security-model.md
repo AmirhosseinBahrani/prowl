@@ -37,7 +37,10 @@ the allowed directories.
   limit, high severity or risk). If a later commit needs a human, PRowl dismisses its earlier
   approval (this needs write access; otherwise it marks it superseded). Verification after
   resolved threads approves only when the agent finds every earlier issue fixed and nothing new,
-  and for PRs that need a human only when you ask for it (`v`). Consider branch
+  **and** the result passes the same gates as a review (policy rules, critical sections,
+  severity, risk, file rules, size limits) — fixes are new code. If they now need a human, the
+  PR goes to your queue instead. For a PR already waiting on you, verification runs only when
+  you ask (`v`), and approves on your behalf if everything was fixed. Consider branch
   protection that requires a human approval for code that matters.
 - **Own comments only.** When updating an earlier PRowl comment, PRowl only adopts comments that
   carry its marker *and* were written by your account.

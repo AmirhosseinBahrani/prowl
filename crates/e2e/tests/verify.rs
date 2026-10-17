@@ -201,3 +201,62 @@ async fn without_agent_verdicts_nothing_is_verified_on_its_own() {
     assert!(h.github.requests_to(Method::POST, "/graphql").is_empty());
     h.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn fixes_that_need_a_human_are_not_approved_by_verification() {
+    let (mut h, _) = setup(&[7]).await;
+    h.restart_with(|c| c.agent_verdicts = true).await.unwrap();
+    // The fix touches authentication: the verification matches the AUTH rule.
+    let mut touches_auth = calm_review();
+    touches_auth["matched_policy_rules"] =
+        json!([{ "id": "AUTH", "evidence": "src/login_7.rs:1" }]);
+    touches_auth["recommendation"] = "approve".into();
+    h.claude
+        .respond_with(vec![
+            ClaudeResponse::review(&with_threaded_finding(calm_review())),
+            ClaudeResponse::review(&touches_auth),
+        ])
+        .unwrap();
+    h.github
+        .route(Method::POST, "/graphql", StatusCode::OK, threads(true));
+    h.client().poll_now().await.unwrap();
+    wait_for_job(&h, finished("done")).await;
+
+    h.client().poll_now().await.unwrap();
+    let verify = h
+        .client()
+        .jobs()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|j| j.kind == "verify")
+        .expect("a verification was queued");
+    job_done(&h, verify.id).await;
+
+    assert!(
+        h.github
+            .writes()
+            .iter()
+            .all(|w| w.body.as_ref().and_then(|b| b.get("event")) != Some(&json!("APPROVE"))),
+        "never approved"
+    );
+    let comment = h
+        .github
+        .requests_to(Method::POST, "/repos/acme/api/issues/7/comments")
+        .pop()
+        .expect("a waiting-for-approval comment");
+    let text = comment.body.as_ref().unwrap()["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        text.contains("Waiting for human approval") && text.contains("AUTH"),
+        "{text}"
+    );
+    assert_eq!(
+        h.client().queue().await.unwrap().len(),
+        1,
+        "it waits for a human"
+    );
+    h.shutdown().await.unwrap();
+}

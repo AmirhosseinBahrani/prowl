@@ -149,6 +149,15 @@ impl Queue {
         Ok(())
     }
 
+    /// Whether the PR is waiting for a human review.
+    pub(crate) async fn is_pending(&self, repo: &str, pr_number: u64) -> anyhow::Result<bool> {
+        match self.pending_item(repo, pr_number).await {
+            Ok(_) => Ok(true),
+            Err(QueueError::NotQueued(_)) => Ok(false),
+            Err(e) => Err(anyhow::anyhow!(e)),
+        }
+    }
+
     /// Takes a PR out of the queue because a newer review no longer needs a human.
     pub(crate) async fn supersede(&self, repo: &str, pr_number: u64) -> anyhow::Result<()> {
         let pending: Option<i64> = sqlx::query_scalar(
