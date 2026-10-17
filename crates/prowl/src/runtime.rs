@@ -239,6 +239,10 @@ fn execute(
             Cmd::SaveSettings { patch } => {
                 Msg::SettingsSaved(client.update_settings(patch).await.map_err(err))
             }
+            Cmd::LoadThreads { repo, pr } => {
+                let result = client.threads(&repo, pr).await.map_err(err);
+                Msg::Threads { repo, pr, result }
+            }
             Cmd::LoadQueueItem { repo, number } => {
                 Msg::QueueDetail(client.queue_item(&repo, number).await.map_err(err))
             }

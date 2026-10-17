@@ -162,88 +162,28 @@ fn current_findings(tab: &ReviewsTab, open: &OpenReview) -> Option<Vec<prowld::r
 /// the title, the explanation and the suggestion, wrapped to fit.
 pub fn finding_box(finding: &prowld::review::Finding, width: u16) -> Vec<Line<'static>> {
     let severity = format!("{:?}", finding.severity).to_lowercase();
-    let color = match severity.as_str() {
-        "critical" => theme::BAD,
-        other => theme::severity(other).fg.unwrap_or(theme::ACCENT),
-    };
-    let edge = Style::default().fg(color);
-    let inner = (width as usize).saturating_sub(6).max(10);
     let place = match finding.line {
         Some(line) => format!("{}:{line}", finding.file),
         None => finding.file.clone(),
     };
-    let label = format!(" {} · {place} ", severity.to_uppercase());
-    let label_width = Span::raw(label.as_str()).width();
-    let mut lines = vec![Line::from(vec![
-        Span::styled(" ┌─", edge),
-        Span::styled(label, edge.add_modifier(Modifier::BOLD)),
-        Span::styled(
-            format!("{}┐", "─".repeat((inner + 1).saturating_sub(label_width))),
-            edge,
-        ),
-    ])];
-    let mut row = |text: String, style: Style| {
-        let pad = inner.saturating_sub(Span::raw(text.as_str()).width());
-        lines.push(Line::from(vec![
-            Span::styled(" │ ", edge),
-            Span::styled(text, style),
-            Span::raw(" ".repeat(pad)),
-            Span::styled(" │", edge),
-        ]));
-    };
-    for text in wrap(finding.title.trim(), inner) {
-        row(text, Style::default().add_modifier(Modifier::BOLD));
-    }
-    for paragraph in finding.body.trim().lines() {
-        for text in wrap(paragraph, inner) {
-            row(text, Style::default());
-        }
-    }
+    let mut rows = vec![crate::boxes::Row::bold(finding.title.trim())];
+    rows.extend(finding.body.trim().lines().map(crate::boxes::Row::plain));
     if let Some(suggestion) = finding
         .suggestion
         .as_deref()
         .filter(|s| !s.trim().is_empty())
     {
-        for text in wrap(&format!("Suggestion: {}", suggestion.trim()), inner) {
-            row(text, Style::default().fg(theme::GOOD));
-        }
+        rows.push(crate::boxes::Row::styled(
+            format!("Suggestion: {}", suggestion.trim()),
+            Style::default().fg(theme::GOOD),
+        ));
     }
-    lines.push(Line::from(Span::styled(
-        format!(" └{}┘", "─".repeat(inner + 2)),
-        edge,
-    )));
-    lines
-}
-
-/// Word-wraps `text` to `width` columns, breaking words longer than a line.
-fn wrap(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        let mut word = word.to_owned();
-        while Span::raw(word.as_str()).width() > width {
-            if !current.is_empty() {
-                lines.push(std::mem::take(&mut current));
-            }
-            let cut: String = word.chars().take(width).collect();
-            word = word.chars().skip(width).collect();
-            lines.push(cut);
-        }
-        let needed = Span::raw(current.as_str()).width()
-            + usize::from(!current.is_empty())
-            + Span::raw(word.as_str()).width();
-        if needed > width && !current.is_empty() {
-            lines.push(std::mem::take(&mut current));
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(&word);
-    }
-    if !current.is_empty() || lines.is_empty() {
-        lines.push(current);
-    }
-    lines
+    crate::boxes::text_box(
+        &format!("{} · {place}", severity.to_uppercase()),
+        crate::boxes::severity_color(&severity),
+        &rows,
+        width,
+    )
 }
 
 /// The PR, the job's state and, once decided, the outcome.

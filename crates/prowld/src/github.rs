@@ -256,6 +256,15 @@ pub struct ReviewThread {
     /// Who opened the thread, and what they wrote.
     pub author: String,
     pub body: String,
+    /// Every comment in the thread, the opening one first (up to 50).
+    #[serde(default)]
+    pub comments: Vec<ThreadComment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadComment {
+    pub author: String,
+    pub body: String,
 }
 
 /// A published release.
@@ -742,7 +751,7 @@ impl GitHub {
                 pageInfo { hasNextPage endCursor }
                 nodes {
                   isResolved isOutdated path line
-                  comments(first: 1) { nodes { author { login } body } }
+                  comments(first: 50) { nodes { author { login } body } }
                 }
               }
             }
@@ -764,7 +773,17 @@ impl GitHub {
             let page = &answer["data"]["repository"]["pullRequest"]["reviewThreads"];
             for node in page["nodes"].as_array().into_iter().flatten() {
                 let first = &node["comments"]["nodes"][0];
+                let comments = node["comments"]["nodes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|c| ThreadComment {
+                        author: c["author"]["login"].as_str().unwrap_or("ghost").to_owned(),
+                        body: c["body"].as_str().unwrap_or_default().to_owned(),
+                    })
+                    .collect();
                 threads.push(ReviewThread {
+                    comments,
                     path: node["path"].as_str().unwrap_or_default().to_owned(),
                     line: node["line"].as_u64().map(|l| l as u32),
                     resolved: node["isResolved"].as_bool().unwrap_or(false),

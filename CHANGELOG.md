@@ -17,6 +17,10 @@ All notable changes to PRowl are documented here. The format is based on
 ### Changed
 
 - The help screen (`?`) is more compact, one line per tab, so it fits smaller terminals.
+- Opening a PR in the Queue tab now shows what PRowl posted on it, as boxes: each review thread
+  it opened — whether it's resolved (or outdated), the finding and every reply, with who wrote
+  it — and the findings that live in its waiting-for-approval comment. `D` switches to the diff
+  and back. `GET /v1/threads` now includes every comment of a thread.
 
 ### Fixed
 
