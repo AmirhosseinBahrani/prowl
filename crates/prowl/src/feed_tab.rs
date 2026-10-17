@@ -167,10 +167,20 @@ pub fn describe(event: &Event) -> (Tone, String) {
             ),
         ),
         "poll.failed" => (Bad, format!("checking GitHub failed: {}", s("error"))),
-        "poll.rate_limited" => (
-            Warn,
-            "GitHub rate limit nearly used up; pausing until it resets".into(),
-        ),
+        "poll.rate_limited" => {
+            let limit = match s("resource").as_str() {
+                "" | "core" => "GitHub API limit".to_owned(),
+                resource => format!("GitHub {resource} limit"),
+            };
+            let resets = event.payload["reset_at"]
+                .as_i64()
+                .map(|at| format!(" (in {})", duration(at * 1000 - event.at_ms)))
+                .unwrap_or_default();
+            (
+                Warn,
+                format!("{limit} nearly used up; pausing until it resets{resets}"),
+            )
+        }
         "pr.enqueued" => (Normal, format!("queued for review: {}", s("title"))),
         "pr.gated_out" => (Dim, format!("not reviewing: {}", words("reason"))),
         "review.started" => (Normal, "reviewing with Claude…".into()),
@@ -288,6 +298,30 @@ pub fn clock(at_ms: i64) -> String {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn rate_limit_pauses_name_the_limit_and_when_it_resets() {
+        let event = |payload: serde_json::Value| Event {
+            id: 1,
+            kind: "poll.rate_limited".into(),
+            payload,
+            at_ms: 1_000_000,
+        };
+        let (_, text) = describe(&event(serde_json::json!({
+            "remaining": 2, "reset_at": 1_045, "resource": "search"
+        })));
+        assert_eq!(
+            text,
+            "GitHub search limit nearly used up; pausing until it resets (in 45s)"
+        );
+        let (_, text) = describe(&event(
+            serde_json::json!({ "remaining": 10, "reset_at": 4_600 }),
+        ));
+        assert_eq!(
+            text,
+            "GitHub API limit nearly used up; pausing until it resets (in 1h 0m)"
+        );
+    }
 
     fn event(id: i64, kind: &str, payload: serde_json::Value) -> Event {
         Event {

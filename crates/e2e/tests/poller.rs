@@ -357,3 +357,47 @@ async fn wait_for_jobs(h: &Harness, n: usize) {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
+
+#[tokio::test]
+async fn the_small_search_limit_does_not_pause_polling() {
+    let h = watching().await;
+    serve(&h, &[Pr::requested(7)]);
+    let reset_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 60;
+    // GitHub allows 30 searches a minute; having used a few is normal.
+    h.github.set_search_rate_limit(30, 25, reset_at);
+
+    let first = h.client().poll_now().await.unwrap();
+    let second = h.client().poll_now().await.unwrap();
+
+    assert_eq!(first.skipped, None);
+    assert_eq!(second.skipped, None);
+    assert_eq!(h.client().jobs().await.unwrap().len(), 1);
+    assert!(events_of(&h, "poll.rate_limited").await.is_empty());
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_exhausted_search_limit_pauses_until_it_resets() {
+    let h = watching().await;
+    serve(&h, &[Pr::requested(7)]);
+    let reset_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 60;
+    h.github.set_search_rate_limit(30, 1, reset_at);
+    h.client().poll_now().await.unwrap();
+
+    let summary = h.client().poll_now().await.unwrap();
+
+    assert_eq!(summary.skipped.as_deref(), Some("rate_limited"));
+    let limited = events_of(&h, "poll.rate_limited").await;
+    assert_eq!(limited.len(), 1);
+    assert_eq!(limited[0].payload["resource"], "search");
+    assert_eq!(limited[0].payload["reset_at"], reset_at);
+    h.shutdown().await.unwrap();
+}

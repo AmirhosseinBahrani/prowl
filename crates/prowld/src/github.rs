@@ -31,15 +31,38 @@ pub(crate) struct GitHub {
     web_url: String,
     /// ETag and body of the last 200 per URL, for conditional requests (a 304 is free).
     etags: Arc<Mutex<HashMap<String, (String, Bytes)>>>,
-    rate: Arc<Mutex<RateLimit>>,
+    /// Last reported state of each rate limit, by resource (`core`, `search`, …).
+    rate: Arc<Mutex<HashMap<String, RateLimit>>>,
 }
 
-/// The API rate limit as last reported by GitHub.
+/// One GitHub rate limit as last reported. GitHub limits resources separately: `core` allows
+/// 5000 requests an hour, `search` 30 a minute.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct RateLimit {
     pub remaining: Option<u64>,
+    /// The size of the limit, when reported.
+    pub limit: Option<u64>,
     /// Unix seconds.
     pub reset_at: Option<u64>,
+}
+
+impl RateLimit {
+    /// Nearly used up: under a tenth of the limit, and never more than [`MIN_RATE_REMAINING`].
+    fn low(&self) -> bool {
+        let margin = self.limit.map_or(MIN_RATE_REMAINING, |limit| {
+            (limit / 10).clamp(1, MIN_RATE_REMAINING)
+        });
+        self.remaining.is_some_and(|remaining| remaining < margin)
+    }
+}
+
+/// A rate limit that is nearly used up, and when it resets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RatePause {
+    pub resource: String,
+    pub remaining: u64,
+    /// Unix seconds.
+    pub reset_at: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -665,22 +688,27 @@ impl GitHub {
     /// When the rate limit is nearly used up, the time (Unix seconds) it resets. Everything
     /// that calls GitHub in the background waits until then.
     pub(crate) fn paused_until(&self) -> Option<u64> {
-        let limit = self.rate_limit();
+        self.rate_pause().map(|pause| pause.reset_at)
+    }
+
+    /// The nearly used-up rate limit that resets last, if any.
+    pub(crate) fn rate_pause(&self) -> Option<RatePause> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        match (limit.remaining, limit.reset_at) {
-            (Some(remaining), Some(reset_at))
-                if remaining < MIN_RATE_REMAINING && reset_at > now =>
-            {
-                Some(reset_at)
-            }
-            _ => None,
-        }
-    }
-
-    pub(crate) fn rate_limit(&self) -> RateLimit {
-        *self.rate.lock().unwrap()
+        self.rate
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, limit)| limit.low())
+            .filter_map(|(resource, limit)| {
+                Some(RatePause {
+                    resource: resource.clone(),
+                    remaining: limit.remaining?,
+                    reset_at: limit.reset_at.filter(|&reset| reset > now)?,
+                })
+            })
+            .max_by_key(|pause| pause.reset_at)
     }
 
     async fn get_json<T: serde::de::DeserializeOwned>(
@@ -742,20 +770,37 @@ impl GitHub {
                 .and_then(|v| v.parse::<u64>().ok())
         };
         if let Some(remaining) = number("x-ratelimit-remaining") {
-            *self.rate.lock().unwrap() = RateLimit {
-                remaining: Some(remaining),
-                reset_at: number("x-ratelimit-reset"),
-            };
+            let resource = response
+                .headers()
+                .get("x-ratelimit-resource")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("core")
+                .to_owned();
+            self.rate.lock().unwrap().insert(
+                resource,
+                RateLimit {
+                    remaining: Some(remaining),
+                    limit: number("x-ratelimit-limit"),
+                    reset_at: number("x-ratelimit-reset"),
+                },
+            );
         }
     }
 
     /// Like [`ok`], but recognises GitHub's rate-limit responses.
     async fn check(&self, response: reqwest::Response) -> Result<reqwest::Response, GitHubError> {
         let status = response.status();
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+        };
         if status == StatusCode::TOO_MANY_REQUESTS
-            || (status == StatusCode::FORBIDDEN && self.rate_limit().remaining == Some(0))
+            || (status == StatusCode::FORBIDDEN && header("x-ratelimit-remaining") == Some(0))
         {
-            let reset_at = self.rate_limit().reset_at.unwrap_or_else(|| {
+            let reset_at = header("x-ratelimit-reset").unwrap_or_else(|| {
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs())
