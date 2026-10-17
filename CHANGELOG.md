@@ -12,14 +12,14 @@ All notable changes to PRowl are documented here. The format is based on
   reviews a pull request again at its current commit and posts a fresh review — even after
   PRowl reviewed it, when GitHub no longer lists you as a requested reviewer.
 
-## [0.1.4] - 2026-10-17
-
 ### Changed
 
 - When a pull request needs a human, the agent's findings are posted as review threads — one per
   finding, on the line it's about — instead of inside one long comment. The "⏳ Waiting for
   human approval" comment keeps the reasons and links to the threads; findings that aren't on a
   changed line stay in the comment.
+
+## [0.1.4] - 2026-10-17
 
 ### Changed
 
