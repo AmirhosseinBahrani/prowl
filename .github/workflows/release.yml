@@ -91,7 +91,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "PRowl $GITHUB_REF_NAME" --generate-notes \
+          python3 packaging/release_notes.py "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" dist > notes.md
+          gh release create "$GITHUB_REF_NAME" --title "PRowl $GITHUB_REF_NAME" --notes-file notes.md --generate-notes \
             dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.sha256 dist/prowl.rb dist/prowl.json \
             install.sh install.ps1
 

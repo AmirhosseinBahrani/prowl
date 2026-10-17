@@ -52,7 +52,10 @@ See [architecture](architecture.md). Database migrations are in `crates/prowld/m
 
 ## Releasing
 
-1. Update `version` in the root `Cargo.toml` and `CHANGELOG.md`.
+1. Update `version` in the root `Cargo.toml`, and in `CHANGELOG.md` move the *Unreleased* notes
+   into a `## [x.y.z] - date` section. That section becomes the release page (with install
+   commands and a download table added by `packaging/release_notes.py`); the release fails if
+   it's missing.
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
 3. The Release workflow builds all targets, creates the GitHub release with archives, `.deb`,
    `.rpm`, checksums, a Homebrew formula, a Scoop manifest and the `install.sh` / `install.ps1`
