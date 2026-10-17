@@ -332,9 +332,15 @@ fn git(dir: &Path, env: &[(String, String)]) -> Git {
 
 struct Git(Command);
 
+/// The git executable, looked up once (see [`crate::tools::find`]).
+fn git_bin() -> &'static Path {
+    static GIT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    GIT.get_or_init(|| crate::tools::find("git").unwrap_or_else(|| PathBuf::from("git")))
+}
+
 impl Git {
     fn new(dir: &Path, env: &[(String, String)]) -> Self {
-        let mut cmd = Command::new("git");
+        let mut cmd = Command::new(git_bin());
         cmd.arg("-C").arg(dir);
         cmd.envs(env.iter().map(|(k, v)| (k, v)));
         // Never prompt for credentials; fail instead.

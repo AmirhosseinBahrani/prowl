@@ -31,6 +31,7 @@ mod server;
 pub mod service;
 pub mod settings;
 mod store;
+mod tools;
 pub mod transport;
 pub mod worker;
 mod workspace;

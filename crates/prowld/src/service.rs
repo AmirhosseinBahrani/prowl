@@ -23,6 +23,10 @@ pub struct ServiceSpec {
     pub exe: PathBuf,
     /// PRowl home the service runs with.
     pub home: PathBuf,
+    /// PATH for the service. Services start with a minimal PATH (on macOS just
+    /// `/usr/bin:/bin:/usr/sbin:/sbin`), which misses `claude` installed with Homebrew, npm or
+    /// the native installer, so the PATH of the shell that installs the service is kept.
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +55,7 @@ impl ServiceSpec {
             name: name.to_owned(),
             exe,
             home,
+            path: std::env::var("PATH").ok().filter(|p| !p.is_empty()),
         })
     }
 
@@ -126,7 +131,7 @@ pub fn launchd_plist(spec: &ServiceSpec) -> String {
     <integer>10</integer>
     <key>ProcessType</key>
     <string>Background</string>
-    <key>StandardOutPath</key>
+{env}    <key>StandardOutPath</key>
     <string>{log}</string>
     <key>StandardErrorPath</key>
     <string>{log}</string>
@@ -138,6 +143,10 @@ pub fn launchd_plist(spec: &ServiceSpec) -> String {
         flag = arg("--home"),
         home = arg(&spec.home.display().to_string()),
         log = xml_escape(&spec.log_file().display().to_string()),
+        env = spec.path.as_deref().map_or(String::new(), |path| format!(
+            "    <key>EnvironmentVariables</key>\n    <dict>\n        <key>PATH</key>\n        <string>{}</string>\n    </dict>\n",
+            xml_escape(path)
+        )),
     )
 }
 
@@ -150,7 +159,7 @@ After=network-online.target
 [Service]
 Type=simple
 ExecStart={exe} --home {home}
-Restart=always
+{env}Restart=always
 RestartSec=5
 
 [Install]
@@ -159,6 +168,12 @@ WantedBy=default.target
         name = spec.name,
         exe = systemd_quote(&spec.exe.display().to_string()),
         home = systemd_quote(&spec.home.display().to_string()),
+        env = spec.path.as_deref().map_or(String::new(), |path| format!(
+            "Environment=\"PATH={}\"\n",
+            path.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('%', "%%")
+        )),
     )
 }
 
@@ -428,7 +443,28 @@ mod tests {
             name: "prowld".into(),
             exe: PathBuf::from("/opt/Pr Owl/prowld-service"),
             home: PathBuf::from("/Users/a&b/Library/Application Support/dev.prowl.prowl"),
+            path: Some("/opt/homebrew/bin:/Users/a&b/.local/bin:/usr/bin:/bin".into()),
         }
+    }
+
+    #[test]
+    fn services_keep_the_installing_shells_path() {
+        let plist = launchd_plist(&spec());
+        assert!(plist.contains(
+            "<key>EnvironmentVariables</key>\n    <dict>\n        <key>PATH</key>\n        \
+             <string>/opt/homebrew/bin:/Users/a&amp;b/.local/bin:/usr/bin:/bin</string>"
+        ));
+        let unit = systemd_unit(&spec());
+        assert!(unit.contains(
+            r#"Environment="PATH=/opt/homebrew/bin:/Users/a&b/.local/bin:/usr/bin:/bin""#
+        ));
+
+        let without = ServiceSpec {
+            path: None,
+            ..spec()
+        };
+        assert!(!launchd_plist(&without).contains("EnvironmentVariables"));
+        assert!(!systemd_unit(&without).contains("Environment="));
     }
 
     #[test]
