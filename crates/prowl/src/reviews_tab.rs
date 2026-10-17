@@ -18,6 +18,8 @@ pub struct ReviewsTab {
     pub loaded: bool,
     pub selected: usize,
     pub open: Option<OpenReview>,
+    /// "Cancel this review?" is waiting for an answer, for this job.
+    pub confirm_cancel: Option<i64>,
     /// A jobs refresh is in flight / another one was asked for meanwhile.
     pub loading: bool,
     pub stale: bool,
@@ -149,7 +151,32 @@ impl ReviewsTab {
         cmds
     }
 
+    /// Asks before stopping a review; only waiting or running ones can be.
+    fn ask_cancel(&mut self, job_id: Option<i64>) -> Vec<Cmd> {
+        let job = match job_id {
+            Some(id) => self.job(id),
+            None => self.ordered().get(self.selected).copied(),
+        };
+        if let Some(job) =
+            job.filter(|j| matches!(j.status.as_str(), "queued" | "running" | "interrupted"))
+        {
+            self.confirm_cancel = Some(job.id);
+        }
+        vec![]
+    }
+
+    pub fn captures_keys(&self) -> bool {
+        self.confirm_cancel.is_some()
+    }
+
     pub fn on_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
+        if let Some(job_id) = self.confirm_cancel.take() {
+            return if key.code == KeyCode::Char('y') {
+                vec![Cmd::CancelJob { job_id }]
+            } else {
+                vec![]
+            };
+        }
         if self.open.is_some() {
             return self.on_detail_key(key);
         }
@@ -170,6 +197,7 @@ impl ReviewsTab {
             }
             KeyCode::Char('o') => return self.open_on_github(None),
             KeyCode::Char('R') => return self.rerun(None),
+            KeyCode::Char('x') => return self.ask_cancel(None),
             KeyCode::Char('v') => return self.verify(None),
             KeyCode::Char('r') => return self.refresh(),
             _ => {}
@@ -208,6 +236,10 @@ impl ReviewsTab {
             KeyCode::Char('R') => {
                 let job_id = open.job_id;
                 return self.rerun(Some(job_id));
+            }
+            KeyCode::Char('x') => {
+                let job_id = open.job_id;
+                return self.ask_cancel(Some(job_id));
             }
             KeyCode::Char('v') => {
                 let job_id = open.job_id;
@@ -355,6 +387,25 @@ mod tests {
         assert!(tab.open.as_ref().unwrap().follow);
         tab.on_key(key(KeyCode::Esc));
         assert!(tab.open.is_none());
+    }
+
+    #[test]
+    fn only_waiting_or_running_reviews_can_be_cancelled_after_asking() {
+        let mut tab = ReviewsTab::default();
+        tab.on_jobs(vec![job(3, "running"), job(1, "done")]);
+        assert!(tab.on_key(key(KeyCode::Char('x'))).is_empty());
+        assert_eq!(tab.confirm_cancel, Some(3));
+        assert_eq!(
+            tab.on_key(key(KeyCode::Char('y'))),
+            [Cmd::CancelJob { job_id: 3 }]
+        );
+
+        tab.on_key(key(KeyCode::Down));
+        tab.on_key(key(KeyCode::Char('x')));
+        assert_eq!(
+            tab.confirm_cancel, None,
+            "a finished review can't be cancelled"
+        );
     }
 
     #[test]

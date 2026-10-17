@@ -46,6 +46,11 @@ enum Command {
         /// owner/repo#number
         pr: String,
     },
+    /// Stop a waiting or running review of a pull request.
+    Cancel {
+        /// owner/repo#number
+        pr: String,
+    },
     /// Review a pull request again at its current commit.
     Rerun {
         /// owner/repo#number
@@ -84,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
                 prowl::cli::resolve(&client, &pr, QueueAction::Dismiss, "").await?
             }
             Command::Rerun { pr } => prowl::cli::rerun(&client, &pr).await?,
+            Command::Cancel { pr } => prowl::cli::cancel(&client, &pr).await?,
             Command::Verify { pr } => prowl::cli::verify(&client, &pr).await?,
         };
         print!("{output}");

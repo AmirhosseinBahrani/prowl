@@ -163,7 +163,7 @@ With these, start the background service yourself: `prowld service install`.
 | **6 Repos** | Choose which repositories PRowl watches. |
 | **7 Settings** | Change behaviour live — budgets, concurrency, keep-awake, file rules, … — and your GitHub account: `t` signs in with a personal access token, `l` signs out. |
 
-Press `?` anywhere for all keys. For scripts there's also a plain command line:
+Press `?` anywhere for all keys. `q` closes the window and PRowl keeps reviewing in the background; `Q` also stops the background service. For scripts there's also a plain command line:
 
 ```sh
 prowl queue                                   # what's waiting for you
@@ -172,10 +172,12 @@ prowl request-changes acme/api#412 -m "Add tests for the new path"
 prowl dismiss acme/api#412
 prowl rerun acme/api#412                      # review it again at its current commit
 prowl verify acme/api#412                     # check the fixes; approve if all were addressed
+prowl cancel acme/api#412                     # stop a waiting or running review of it
 prowld status                                 # daemon state as JSON
 prowld login [--token]                        # connect GitHub (device flow, or a token on stdin)
 prowld logout
 prowld service install | uninstall | status
+prowld service stop | start                   # pause PRowl / resume (it starts again at login)
 ```
 
 ## The Review Policy

@@ -84,8 +84,10 @@ fn daemon_down(app: &App, frame: &mut Frame, area: Rect) {
     lines.push(Line::from(""));
     lines.push(Line::from("PRowl's background service isn't running."));
     lines.push(Line::from(vec![
+        crate::theme::key("[s] "),
+        "start it  ".into(),
         crate::theme::key("[i] "),
-        "install and start it  ".into(),
+        "(re)install it  ".into(),
         crate::theme::key("[r] "),
         "retry  ".into(),
         crate::theme::key("[q] "),
@@ -524,45 +526,57 @@ pub fn help_lines() -> Vec<Line<'static>> {
     let row = |keys: &str, what: &str| {
         Line::from(vec![
             Span::raw("   "),
-            theme::key(&format!("{keys:<14}")),
+            theme::key(&format!("{keys:<16} ")),
             Span::raw(what.to_owned()),
         ])
     };
     vec![
         heading("Everywhere"),
-        row("← → tab", "next / previous tab (shift-tab: previous)"),
-        row("1–7", "jump to a tab"),
-        row("↑↓ j k", "move"),
-        row("n p", "next / previous page"),
-        row("r", "refresh or retry"),
-        row("?", "this help"),
-        row("q ctrl-c", "quit"),
-        Line::from(""),
-        heading("1 Queue"),
-        row("enter", "open: why it waits, the agent's notes, the diff"),
-        row("a r d", "approve · request changes · dismiss"),
-        row("o R", "open on GitHub · review it again"),
-        row("v", "verify fixes; approve if all were addressed"),
-        row("↑↓ ] [ esc", "in a PR: scroll · next/previous file · back"),
-        heading("2 Feed"),
-        row("space f c p", "pause/follow · filter · clear · show polls"),
-        heading("3 Reviews"),
-        row("enter", "conversation & result"),
-        row("g G", "top / end (end follows a running review)"),
-        row("o R", "open on GitHub · review it again"),
-        heading("4 History"),
         row(
-            "enter o f R",
-            "details · open on GitHub · filter · review again",
+            "← → tab  1–7",
+            "switch tab (shift-tab: previous) · jump to a tab",
         ),
-        heading("5 Policy"),
-        row("e h r", "edit · history · restore a version"),
-        row("n x t", "new override · delete override · dry-run a PR"),
-        heading("6 Repos"),
-        row("/ space", "search · watch / unwatch"),
-        heading("7 Settings"),
-        row("enter a x", "change · add file rule · remove file rule"),
-        row("t l", "sign in with a token · sign out of GitHub"),
+        row("↑↓ j k  n p", "move · next / previous page"),
+        row("r  ?", "refresh or retry · this help"),
+        row(
+            "q  Q",
+            "quit (keeps reviewing in the background) · quit and stop the service",
+        ),
+        Line::from(""),
+        heading("Tabs"),
+        row(
+            "1 Queue",
+            "enter open · a approve · r request changes · d dismiss · o open",
+        ),
+        row(
+            "",
+            "R review again · v verify fixes & approve · in a PR: ↑↓ ] [ esc",
+        ),
+        row(
+            "2 Feed",
+            "space pause/follow · f filter · c clear · p show polls",
+        ),
+        row(
+            "3 Reviews",
+            "enter conversation & result · g G top/end · o open",
+        ),
+        row(
+            "",
+            "R review again · v verify · x cancel a waiting or running review",
+        ),
+        row(
+            "4 History",
+            "enter details · o open on GitHub · f filter · R review again",
+        ),
+        row(
+            "5 Policy",
+            "e edit · h history · r restore · n new override · x delete · t dry-run",
+        ),
+        row("6 Repos  / space", "search · watch / unwatch"),
+        row(
+            "7 Settings",
+            "enter change · a/x add/remove file rule · t token · l sign out",
+        ),
         Line::from(""),
         heading("Update PRowl (rerun the installer)"),
         Line::from(format!("   {UPDATE_COMMAND}")).dim(),
@@ -591,11 +605,11 @@ mod tests {
         let screen = render_help(120, 50);
         let text = screen.join("\n");
         for row in [
-            "← → tab       next / previous tab (shift-tab: previous)",
-            "a r d         approve · request changes · dismiss",
-            "g G           top / end (end follows a running review)",
-            "n x t         new override · delete override · dry-run a PR",
-            "enter a x     change · add file rule · remove file rule",
+            "← → tab  1–7     switch tab (shift-tab: previous) · jump to a tab",
+            "q  Q             quit (keeps reviewing in the background) · quit and stop the service",
+            "3 Reviews        enter conversation & result · g G top/end · o open",
+            "6 Repos  / space search · watch / unwatch",
+            "7 Settings       enter change · a/x add/remove file rule · t token · l sign out",
             UPDATE_COMMAND,
             "press any key to close",
         ] {
@@ -608,6 +622,13 @@ mod tests {
             screen[bottom - 1].contains("press any key"),
             "the box ends right after its last line:\n{text}"
         );
+    }
+
+    #[test]
+    fn the_help_fits_a_small_terminal() {
+        let text = render_help(100, 30).join("\n");
+        assert!(text.contains("7 Settings"), "{text}");
+        assert!(text.contains("press any key to close"), "{text}");
     }
 
     #[test]

@@ -105,6 +105,18 @@ impl Workspace {
         let _ = std::fs::remove_dir_all(&checkout.material);
     }
 
+    /// Removes a job's checkout and review material, if it has any (e.g. after it was cancelled
+    /// mid-review).
+    pub(crate) async fn discard(&self, repo: &str, job_id: i64) {
+        let checkout = Checkout {
+            worktree: self.worktrees_dir.join(job_id.to_string()),
+            material: self.material_dir.join(job_id.to_string()),
+        };
+        if checkout.worktree.exists() || checkout.material.exists() {
+            self.remove(repo, &checkout).await;
+        }
+    }
+
     /// Removes worktrees left behind by a crash.
     /// Cleans up after a crash: removes leftover checkouts and review material, and the lock
     /// files git leaves when it is killed mid-operation. Only call it when no PRowl git
