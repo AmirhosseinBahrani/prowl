@@ -6,27 +6,33 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-17
+
 ### Added
 
-- PRowl checks for a newer release every 6 hours; the TUI's bottom bar shows
-  `⬆ vX.Y.Z available` and `?` shows the command to update (re-running the installer). Turn it off
-  with `PROWL_UPDATE_REPO=` (empty).
-- **Agent verdicts** (Settings → "Agent approves / requests changes on low-risk PRs", off by
-  default): on PRs that don't need a human, the agent's review approves or requests changes as
-  Claude recommends, instead of only commenting. If a newer commit needs a human, PRowl
-  dismisses its earlier approval.
-- `←` and `→` switch between tabs in the TUI, alongside the number keys and `Tab` / `Shift+Tab`.
 - **Reviews tab** (`3`): reviews running now and before, each with its full record — the context
   and prompt Claude was given, its messages, every file it read or searched (live while it
   runs), its answer, PRowl's decision and what was posted to GitHub. The daemon keeps these
   transcripts and serves them at `GET /v1/jobs/{id}/transcript`; the Feed also shows each file
   Claude reads. History, Policy, Repos and Settings move to `4`–`7`.
+- **Agent verdicts** (Settings → "Agent approves / requests changes on low-risk PRs", off by
+  default): on PRs that don't need a human, the agent's review approves or requests changes as
+  Claude recommends, instead of only commenting. If a newer commit needs a human, PRowl
+  dismisses its earlier approval.
+- **Update check**: PRowl looks for a newer release every 6 hours; the TUI's bottom bar shows
+  `⬆ vX.Y.Z available` and `?` shows the command to update (re-running the installer). Turn it off
+  with `PROWL_UPDATE_REPO=` (empty).
+- `←` and `→` switch between tabs in the TUI, alongside the number keys and `Tab` / `Shift+Tab`.
 
 ### Fixed
 
 - PRowl no longer pauses with "GitHub rate limit nearly used up" after ordinary polls. GitHub's
   search limit (30 a minute) was mistaken for the main API limit (5000 an hour); limits are now
   tracked separately, and the Feed says which one is low and when it resets.
+- Finishing setup right after watching a repository no longer says "Watch at least one
+  repository" because of a stale count.
+- Deleting a policy override no longer shows "no policy override exists" instead of the
+  confirmation.
 
 ## [0.1.1] - 2026-10-17
 
@@ -64,6 +70,7 @@ First public version.
 - One-line installers (`install.sh`, `install.ps1`) that verify checksums, install into your home
   directory with versioned upgrades, and start the background service.
 
-[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/AmirhosseinBahrani/prowl/releases/tag/v0.1.0
