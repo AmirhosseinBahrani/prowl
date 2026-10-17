@@ -170,6 +170,7 @@ impl ReviewsTab {
             }
             KeyCode::Char('o') => return self.open_on_github(None),
             KeyCode::Char('R') => return self.rerun(None),
+            KeyCode::Char('v') => return self.verify(None),
             KeyCode::Char('r') => return self.refresh(),
             _ => {}
         }
@@ -208,6 +209,10 @@ impl ReviewsTab {
                 let job_id = open.job_id;
                 return self.rerun(Some(job_id));
             }
+            KeyCode::Char('v') => {
+                let job_id = open.job_id;
+                return self.verify(Some(job_id));
+            }
             _ => {}
         }
         vec![]
@@ -221,6 +226,21 @@ impl ReviewsTab {
         };
         job.map(|j| {
             vec![Cmd::Rerun {
+                repo: j.repo.clone(),
+                pr: j.pr_number,
+            }]
+        })
+        .unwrap_or_default()
+    }
+
+    /// Checks the selected (or open) job's PR for addressed findings, approving it if so.
+    fn verify(&self, job_id: Option<i64>) -> Vec<Cmd> {
+        let job = match job_id {
+            Some(id) => self.job(id),
+            None => self.ordered().get(self.selected).copied(),
+        };
+        job.map(|j| {
+            vec![Cmd::Verify {
                 repo: j.repo.clone(),
                 pr: j.pr_number,
             }]

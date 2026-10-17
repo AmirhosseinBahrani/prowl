@@ -196,6 +196,89 @@ async fn post_findings_threads(
         .map(Some)
 }
 
+/// Whether a verification found nothing left to fix (trivial notes don't count).
+pub(crate) fn verification_passed(output: &ReviewOutput) -> bool {
+    output
+        .findings
+        .iter()
+        .all(|f| f.severity == crate::review::Severity::Trivial)
+}
+
+/// Posts the result of a verification run as PRowl's review of this commit: an approval when
+/// everything was addressed, otherwise a COMMENT review with a thread per remaining issue.
+pub(crate) async fn publish_verification(
+    github: &GitHub,
+    token: &str,
+    target: &Target<'_>,
+    output: Result<&ReviewOutput, &str>,
+    checked: usize,
+) -> Result<Submitted, GitHubError> {
+    let footer = format!(
+        "<sub>Commit {} · policy {} v{}</sub>\n{}",
+        short(target.head_sha),
+        target.policy_scope,
+        target.policy_version_id,
+        marker(target)
+    );
+    let intro = format!(
+        "> Written by an AI agent (Claude, run by PRowl) on behalf of @{}, after the review \
+         threads were resolved: it checked the {checked} earlier finding(s) against the current \
+         code and looked for new issues.\n\n",
+        target.reviewer
+    );
+    let (event, body, comments) = match output {
+        Ok(output) if verification_passed(output) => (
+            "APPROVE",
+            format!(
+                "### ✅ PRowl verification passed\n\n{intro}{}\n\nEverything was addressed and \
+                 nothing new turned up, so this pull request is approved.\n\n{footer}",
+                output.summary.trim()
+            ),
+            Vec::new(),
+        ),
+        Ok(output) => {
+            let (inline, elsewhere) = split_findings(github, token, target, output).await?;
+            let mut body = format!(
+                "### 🔁 PRowl verification: {} issue(s) remain\n\n{intro}{}\n\n",
+                output.findings.len(),
+                output.summary.trim()
+            );
+            if !inline.is_empty() {
+                body.push_str(&format!(
+                    "**{} posted as threads** on the changed lines — resolve them once they're \
+                     fixed and PRowl checks again.\n\n",
+                    inline.len()
+                ));
+            }
+            push_findings(&mut body, &elsewhere);
+            body.push_str(&footer);
+            ("COMMENT", body, threads(&inline))
+        }
+        Err(problem) => (
+            "COMMENT",
+            format!(
+                "### ⚠️ PRowl verification couldn't finish\n\n{intro}The agent's answer was \
+                 unusable ({problem}), so nothing was approved. Ask for another check or review it \
+                 yourself.\n\n{footer}"
+            ),
+            Vec::new(),
+        ),
+    };
+    github
+        .create_review(
+            token,
+            target.repo,
+            target.number,
+            &NewReview {
+                commit_id: target.head_sha,
+                body: &body,
+                event,
+                comments,
+            },
+        )
+        .await
+}
+
 /// Publishes a decided review, reusing what PRowl posted on this PR before (`prior`, updated
 /// in place to describe what is now posted):
 /// - AGENT_ONLY: a new COMMENT review (inline notes need the new commit). The previous agent

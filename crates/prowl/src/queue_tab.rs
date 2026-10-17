@@ -140,6 +140,14 @@ impl QueueTab {
                     }];
                 }
             }
+            KeyCode::Char('v') => {
+                if let Some(item) = self.current() {
+                    return vec![Cmd::Verify {
+                        repo: item.repo.clone(),
+                        pr: item.pr_number,
+                    }];
+                }
+            }
             KeyCode::Esc => self.detail = None,
             KeyCode::Enter if self.detail.is_none() => {
                 if let Some(item) = self.items.get(self.selected) {

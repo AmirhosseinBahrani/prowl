@@ -51,6 +51,11 @@ enum Command {
         /// owner/repo#number
         pr: String,
     },
+    /// Check that a pull request's findings were addressed, and approve it if so.
+    Verify {
+        /// owner/repo#number
+        pr: String,
+    },
 }
 
 #[tokio::main]
@@ -79,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
                 prowl::cli::resolve(&client, &pr, QueueAction::Dismiss, "").await?
             }
             Command::Rerun { pr } => prowl::cli::rerun(&client, &pr).await?,
+            Command::Verify { pr } => prowl::cli::verify(&client, &pr).await?,
         };
         print!("{output}");
         return Ok(());

@@ -236,6 +236,24 @@ impl Worker {
                     .output
                     .as_ref()
                     .ok_or(stored.invalid_reason.as_deref().unwrap_or("invalid output"));
+                // A verification that escalated was stored with its reasons and is published
+                // like any review that needs a human.
+                if job.kind == crate::jobs::kinds::VERIFY && stored.decision_reasons.is_empty() {
+                    let checked = inner
+                        .reviews
+                        .latest_valid_for_pr(&job.repo, job.pr_number, job.id)
+                        .await?
+                        .map_or(0, |o| o.findings.len());
+                    let policy = inner
+                        .policies
+                        .effective(Some(&Scope::parse_repo(&job.repo)?))
+                        .await?;
+                    return self
+                        .finish_verification(
+                            job, &token, &reviewer, stored.id, &policy, output, checked,
+                        )
+                        .await;
+                }
                 return self
                     .publish(
                         job,
@@ -255,8 +273,14 @@ impl Worker {
         }
         let settings = inner.settings.get();
         let changed_lines = pr.additions + pr.deletions;
-        if changed_lines > settings.max_changed_lines
-            || pr.changed_files > settings.max_changed_files
+        // A PR waiting in the Human Review Queue is verified only because the user asked: the
+        // approval is theirs to request. Anything else goes through every policy gate again,
+        // since the fixes are new code.
+        let verify_for_human = job.kind == crate::jobs::kinds::VERIFY
+            && inner.queue.is_pending(&job.repo, job.pr_number).await?;
+        if !verify_for_human
+            && (changed_lines > settings.max_changed_lines
+                || pr.changed_files > settings.max_changed_files)
         {
             return self
                 .too_large(job, &token, &reviewer, changed_lines, pr.changed_files)
@@ -278,6 +302,22 @@ impl Worker {
             .await;
             return Err(e.into());
         }
+        // A verification checks the latest review's findings against the code as it is now.
+        let verify = if job.kind == crate::jobs::kinds::VERIFY {
+            let previous = inner
+                .reviews
+                .latest_valid_for_pr(&job.repo, job.pr_number, job.id)
+                .await?
+                .map(|o| o.findings)
+                .unwrap_or_default();
+            let threads = inner
+                .github
+                .review_threads(&token, &job.repo, job.pr_number)
+                .await?;
+            Some(VerifyInput { previous, threads })
+        } else {
+            None
+        };
 
         let ClaudeRun {
             policy,
@@ -286,7 +326,7 @@ impl Worker {
             cost,
             duration_ms,
         } = self
-            .run_claude(job, &pr, &reviewer, &token, budget_left)
+            .run_claude(job, &pr, &reviewer, &token, budget_left, verify.as_ref())
             .await?;
 
         let review_id = inner
@@ -327,6 +367,24 @@ impl Worker {
             verdict.decision = Decision::NeedsHuman;
             verdict.reasons.insert(0, rule);
         }
+        // A verification approves only what the policy would leave to the agent (or what the
+        // user asked to approve, for a PR waiting on them). If the fixes now need a human, the
+        // result is published like any review that needs one: threads, comment, queue.
+        if let Some(verify) = &verify
+            && (verify_for_human || verdict.decision == Decision::AgentOnly)
+        {
+            return self
+                .finish_verification(
+                    job,
+                    &token,
+                    &reviewer,
+                    review_id,
+                    &policy,
+                    output.as_ref().map_err(String::as_str),
+                    verify.previous.len(),
+                )
+                .await;
+        }
         inner
             .reviews
             .set_decision(review_id, verdict.decision, &verdict.reasons)
@@ -365,6 +423,7 @@ impl Worker {
         reviewer: &str,
         token: &str,
         budget: Option<f64>,
+        verify: Option<&VerifyInput>,
     ) -> anyhow::Result<ClaudeRun> {
         let inner = &self.inner;
         let scope = Scope::parse_repo(&job.repo)?;
@@ -383,25 +442,26 @@ impl Worker {
             )
             .await?;
         let material = checkout.material.display().to_string().replace('\\', "/");
-        let message = prompt::first_message(
-            &PrContext {
-                repo: &job.repo,
-                number: job.pr_number,
-                title: &pr.title,
-                author: &pr.user.login,
-                description: pr.body.as_deref().unwrap_or(""),
-                base_ref: &pr.base.ref_name,
-                base_sha: &pr.base.sha,
-                head_sha: &job.head_sha,
-                changed_files: pr.changed_files,
-                additions: pr.additions,
-                deletions: pr.deletions,
-                labels: &labels,
-                reviewer,
-                material_dir: &material,
-            },
-            &policy,
-        );
+        let context = PrContext {
+            repo: &job.repo,
+            number: job.pr_number,
+            title: &pr.title,
+            author: &pr.user.login,
+            description: pr.body.as_deref().unwrap_or(""),
+            base_ref: &pr.base.ref_name,
+            base_sha: &pr.base.sha,
+            head_sha: &job.head_sha,
+            changed_files: pr.changed_files,
+            additions: pr.additions,
+            deletions: pr.deletions,
+            labels: &labels,
+            reviewer,
+            material_dir: &material,
+        };
+        let message = match verify {
+            Some(v) => prompt::verify_message(&context, &policy, &v.previous, &v.threads),
+            None => prompt::first_message(&context, &policy),
+        };
         self.emit(
             kind::STARTED,
             job,
@@ -548,7 +608,7 @@ impl Worker {
         };
         inner.claude.locate()?;
         let run = self
-            .run_claude(&job, &pr, &reviewer, &token, budget)
+            .run_claude(&job, &pr, &reviewer, &token, budget, None)
             .await?;
         inner.reviews.record_dry_run(repo, number, run.cost).await?;
         let rule_ids: Vec<String> = run.policy.rules.iter().map(|r| r.id.clone()).collect();
@@ -674,6 +734,106 @@ impl Worker {
             .await;
         }
         Ok(None)
+    }
+
+    /// Posts a verification's result: an approval when everything was addressed (and, for a
+    /// PR waiting in the queue, takes it out as approved), otherwise threads for what remains.
+    #[allow(clippy::too_many_arguments)]
+    async fn finish_verification(
+        &self,
+        job: &Job,
+        token: &str,
+        reviewer: &str,
+        review_id: i64,
+        policy: &crate::policy::EffectivePolicy,
+        output: Result<&ReviewOutput, &str>,
+        checked: usize,
+    ) -> anyhow::Result<()> {
+        let inner = &self.inner;
+        let passed = output.is_ok_and(publish::verification_passed);
+        let decision = if passed {
+            Decision::AgentOnly
+        } else {
+            Decision::NeedsHuman
+        };
+        inner.reviews.set_decision(review_id, decision, &[]).await?;
+        let summary = if passed {
+            "verified: everything was addressed; approving"
+        } else {
+            "verification found issues that remain"
+        };
+        self.record(
+            job,
+            transcripts::kind::DECISION,
+            serde_json::json!({ "decision": decision, "reasons": [], "summary": summary, "verification": true }),
+        )
+        .await;
+        self.emit(
+            kind::DECIDED,
+            job,
+            serde_json::json!({
+                "review_id": review_id, "decision": decision, "reasons": [],
+                "summary": summary, "verification": true,
+            }),
+        )
+        .await;
+        let target = Target {
+            repo: &job.repo,
+            number: job.pr_number,
+            head_sha: &job.head_sha,
+            reviewer,
+            policy_scope: &policy.scope,
+            policy_version_id: policy.version_id,
+            agent_verdicts: inner.settings.get().agent_verdicts,
+            run: Some(job.id),
+        };
+        let submitted =
+            publish::publish_verification(&inner.github, token, &target, output, checked).await?;
+        let mut prior = inner.publications.prior(&job.repo, job.pr_number).await?;
+        prior.agent_review = Some((submitted.id, submitted.html_url.clone()));
+        inner
+            .publications
+            .save(
+                &job.repo,
+                job.pr_number,
+                &job.head_sha,
+                prior.last_decision.unwrap_or(decision),
+                &prior,
+            )
+            .await?;
+        inner
+            .reviews
+            .set_published(review_id, submitted.id, &submitted.html_url)
+            .await?;
+        self.record(
+            job,
+            transcripts::kind::PUBLISHED,
+            serde_json::json!({
+                "as": "review",
+                "state": submitted.state,
+                "url": submitted.html_url,
+                "body": submitted.body,
+            }),
+        )
+        .await;
+        if passed {
+            inner
+                .queue
+                .approved_by_verification(&job.repo, job.pr_number)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+        }
+        self.emit(
+            kind::PUBLISHED,
+            job,
+            serde_json::json!({
+                "review_id": review_id, "decision": decision, "url": submitted.html_url,
+                "verification": true, "approved": passed,
+            }),
+        )
+        .await;
+        inner.jobs.finish(job.id, "done", None).await?;
+        Ok(())
     }
 
     /// Posts a decided review to GitHub and records it. Safe to repeat: posts made by an
@@ -959,6 +1119,13 @@ impl Worker {
 }
 
 const DAY_MS: i64 = 86_400_000;
+
+/// What a verification run gets beyond a normal review.
+struct VerifyInput {
+    /// The findings of the review being verified.
+    previous: Vec<crate::review::Finding>,
+    threads: Vec<crate::github::ReviewThread>,
+}
 
 /// What a run of Claude produced, before anything is stored or published.
 struct ClaudeRun {

@@ -196,6 +196,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     }
     let state = AppState {
         auth: auth.clone(),
+        github_api: github.clone(),
         policies,
         repos,
         jobs,

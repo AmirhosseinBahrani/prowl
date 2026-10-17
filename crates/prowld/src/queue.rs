@@ -149,6 +149,15 @@ impl Queue {
         Ok(())
     }
 
+    /// Whether the PR is waiting for a human review.
+    pub(crate) async fn is_pending(&self, repo: &str, pr_number: u64) -> anyhow::Result<bool> {
+        match self.pending_item(repo, pr_number).await {
+            Ok(_) => Ok(true),
+            Err(QueueError::NotQueued(_)) => Ok(false),
+            Err(e) => Err(anyhow::anyhow!(e)),
+        }
+    }
+
     /// Takes a PR out of the queue because a newer review no longer needs a human.
     pub(crate) async fn supersede(&self, repo: &str, pr_number: u64) -> anyhow::Result<()> {
         let pending: Option<i64> = sqlx::query_scalar(
@@ -226,6 +235,25 @@ impl Queue {
             status: status.to_owned(),
             ..item
         })
+    }
+
+    /// After a verification the user asked for approved the PR: if it waits in the queue, it
+    /// leaves it as approved. Returns whether it was queued.
+    pub(crate) async fn approved_by_verification(
+        &self,
+        repo: &str,
+        pr_number: u64,
+    ) -> Result<bool, QueueError> {
+        match self.pending_item(repo, pr_number).await {
+            Ok(_) => {
+                let token = self.token().await?;
+                self.relabel(&token, repo, pr_number, "approved").await?;
+                self.mark(repo, pr_number, "approved", "verified").await?;
+                Ok(true)
+            }
+            Err(QueueError::NotQueued(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Resolves queued PRs the user reviewed on GitHub directly, or that were closed.
