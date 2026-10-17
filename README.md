@@ -72,6 +72,11 @@ flowchart LR
    with agent verdicts on, an approval or change request as Claude recommends); anything
    else gets its findings as review threads on the changed lines plus a short "⏳ Waiting for
    human approval" comment explaining why, and lands in your queue.
+5. **Verify** — once every thread PRowl opened is resolved, a verification agent checks the
+   current code: is each finding really fixed, and is there anything new? If all is well it
+   approves the PR — on its own for agent-only PRs (with *agent verdicts* on), or when you press
+   `v` (or run `prowl verify`) for PRs that need a human. If not, it opens threads for what
+   remains, and the cycle repeats.
 
 ## Quick start
 
@@ -166,6 +171,7 @@ prowl approve acme/api#412 -m "Looks good"    # approve on GitHub, as you
 prowl request-changes acme/api#412 -m "Add tests for the new path"
 prowl dismiss acme/api#412
 prowl rerun acme/api#412                      # review it again at its current commit
+prowl verify acme/api#412                     # check the fixes; approve if all were addressed
 prowld status                                 # daemon state as JSON
 prowld login [--token]                        # connect GitHub (device flow, or a token on stdin)
 prowld logout

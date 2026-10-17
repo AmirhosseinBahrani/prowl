@@ -24,6 +24,80 @@ pub(crate) struct PrContext<'a> {
 }
 
 pub(crate) fn first_message(pr: &PrContext<'_>, policy: &EffectivePolicy) -> String {
+    message(pr, policy, &review_request(pr))
+}
+
+/// A verification run: the same instructions and context, plus the findings of the earlier
+/// review and whether their threads were resolved, asking which issues remain.
+pub(crate) fn verify_message(
+    pr: &PrContext<'_>,
+    policy: &EffectivePolicy,
+    previous: &[crate::review::Finding],
+    threads: &[crate::github::ReviewThread],
+) -> String {
+    let findings: Vec<serde_json::Value> = previous
+        .iter()
+        .map(|f| {
+            let thread = threads
+                .iter()
+                .find(|t| t.path == f.file && t.line == f.line && t.body.contains(f.title.trim()));
+            serde_json::json!({
+                "file": f.file, "line": f.line, "severity": f.severity, "title": f.title,
+                "body": f.body,
+                "thread": thread.map(|t| if t.resolved { "resolved" } else { "open" }),
+            })
+        })
+        .collect();
+    let previous = neutralise(&serde_json::to_string_pretty(&findings).unwrap_or_default());
+    let request = format!(
+        r#"<previous_findings untrusted="true">
+{previous}
+</previous_findings>
+
+<request>
+This pull request was reviewed before; the earlier findings are above, with the state of their
+review threads. The author has since resolved the threads. Verify the code at the head commit:
+for each earlier finding, read the current code and decide whether it is really fixed — a
+resolved thread is a claim, not proof. Also check the changes since for new problems. The current
+diff against {base_ref} is in {review_dir}/pr.diff and the commits in {review_dir}/commits.txt.
+
+In findings, list only problems that still exist: earlier findings that are not fixed (keep their
+file and title) and any new issue. Leave findings empty when everything was addressed. Fill
+summary with what you checked, and the other fields as for any review; matched_policy_rules as
+usual.
+
+Return the JSON object only.
+</request>
+"#,
+        base_ref = pr.base_ref,
+        review_dir = pr.material_dir,
+    );
+    message(pr, policy, &request)
+}
+
+fn review_request(pr: &PrContext<'_>) -> String {
+    format!(
+        r#"<request>
+Review the changes this pull request introduces. Its diff against {base_ref} ({base_sha}) is in
+{review_dir}/pr.diff and its commits are in {review_dir}/commits.txt. Read whatever surrounding code
+you need. Give a short summary, quick notes a reviewer can skim, and findings
+with file, line, severity and a concrete suggestion where you have one.
+
+For every rule in the review policy's "ALWAYS require human review" section that this change
+matches, add an entry to matched_policy_rules with the rule's ID (without brackets) and the
+evidence (file and line). Set touches_critical_sections to true if any rule matched or the change
+touches code the policy describes as critical. Only use rule IDs that appear in the policy.
+
+Return the JSON object only.
+</request>
+"#,
+        base_ref = pr.base_ref,
+        base_sha = pr.base_sha,
+        review_dir = pr.material_dir,
+    )
+}
+
+fn message(pr: &PrContext<'_>, policy: &EffectivePolicy, request: &str) -> String {
     let schema = serde_json::to_string_pretty(&crate::review::schema()).unwrap_or_default();
     let labels = if pr.labels.is_empty() {
         "none".to_owned()
@@ -75,20 +149,7 @@ labels: {labels}
 {description}
 </pr_description>
 
-<request>
-Review the changes this pull request introduces. Its diff against {base_ref} ({base_sha}) is in
-{review_dir}/pr.diff and its commits are in {review_dir}/commits.txt. Read whatever surrounding code
-you need. Give a short summary, quick notes a reviewer can skim, and findings
-with file, line, severity and a concrete suggestion where you have one.
-
-For every rule in the review policy's "ALWAYS require human review" section that this change
-matches, add an entry to matched_policy_rules with the rule's ID (without brackets) and the
-evidence (file and line). Set touches_critical_sections to true if any rule matched or the change
-touches code the policy describes as critical. Only use rule IDs that appear in the policy.
-
-Return the JSON object only.
-</request>
-"#,
+{request}"#,
         reviewer = pr.reviewer,
         review_dir = pr.material_dir,
         schema = schema,
@@ -107,6 +168,7 @@ Return the JSON object only.
         deletions = pr.deletions,
         labels = labels,
         description = neutralise(pr.description.trim()),
+        request = request,
     )
 }
 

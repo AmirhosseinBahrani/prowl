@@ -8,6 +8,13 @@ All notable changes to PRowl are documented here. The format is based on
 
 ### Added
 
+- **Verification after resolved threads**: once every review thread PRowl opened is resolved, a
+  verification agent checks the current code — is each finding really fixed, anything new? — and
+  approves the PR if all is well, or opens threads for what remains. It runs on its own for
+  agent-only PRs when *agent verdicts* are on (once per commit); for PRs that need a human, press
+  `v` in the Queue or Reviews tab, or run `prowl verify owner/repo#N`, and an approval also
+  takes the PR out of the queue. `GET /v1/threads` lists a PR's threads and whether each is
+  resolved.
 - **Review again**: `R` in the Queue, Reviews and History tabs (or `prowl rerun owner/repo#N`)
   reviews a pull request again at its current commit and posts a fresh review — even after
   PRowl reviewed it, when GitHub no longer lists you as a requested reviewer.

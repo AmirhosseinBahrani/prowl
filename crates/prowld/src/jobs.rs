@@ -140,6 +140,39 @@ impl Jobs {
         .last_insert_rowid())
     }
 
+    /// Whether a job of `kind` exists for this exact commit, in any state.
+    pub(crate) async fn exists_of_kind(
+        &self,
+        repo: &str,
+        pr_number: u64,
+        head_sha: &str,
+        kind: &str,
+    ) -> anyhow::Result<bool> {
+        let found: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM jobs WHERE repo = ? AND pr_number = ? AND head_sha = ? AND kind = ?",
+        )
+        .bind(repo)
+        .bind(pr_number as i64)
+        .bind(head_sha)
+        .bind(kind)
+        .fetch_optional(&self.db)
+        .await?;
+        Ok(found.is_some())
+    }
+
+    /// Pull requests whose latest PRowl result was agent-only and posted as a review — the
+    /// ones whose findings' threads PRowl watches.
+    pub(crate) async fn agent_reviewed_prs(&self) -> anyhow::Result<Vec<(String, u64)>> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT repo, pr_number FROM pr_publications
+             WHERE last_decision = 'AGENT_ONLY' AND agent_review_id IS NOT NULL
+             ORDER BY updated_at_ms DESC LIMIT 200",
+        )
+        .fetch_all(&self.db)
+        .await?;
+        Ok(rows.into_iter().map(|(r, n)| (r, n as u64)).collect())
+    }
+
     pub(crate) async fn get(&self, id: i64) -> anyhow::Result<Option<Job>> {
         let row: Option<JobRow> = sqlx::query_as(
             "SELECT id, repo, pr_number, head_sha, title, author, html_url, status, attempts,
