@@ -6,6 +6,8 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-17
+
 First public version.
 
 ### Added
@@ -28,3 +30,6 @@ First public version.
 - Release builds for macOS, Linux and Windows with Homebrew, Scoop, `.deb` and `.rpm` packages.
 - One-line installers (`install.sh`, `install.ps1`) that verify checksums, install into your home
   directory with versioned upgrades, and start the background service.
+
+[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/AmirhosseinBahrani/prowl/releases/tag/v0.1.0
