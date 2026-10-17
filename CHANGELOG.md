@@ -12,7 +12,12 @@ All notable changes to PRowl are documented here. The format is based on
   default): on PRs that don't need a human, the agent's review approves or requests changes as
   Claude recommends, instead of only commenting. If a newer commit needs a human, PRowl
   dismisses its earlier approval.
-- `←` and `→` switch between tabs in the TUI, alongside `1`–`6` and `Tab` / `Shift+Tab`.
+- `←` and `→` switch between tabs in the TUI, alongside the number keys and `Tab` / `Shift+Tab`.
+- **Reviews tab** (`3`): reviews running now and before, each with its full record — the context
+  and prompt Claude was given, its messages, every file it read or searched (live while it
+  runs), its answer, PRowl's decision and what was posted to GitHub. The daemon keeps these
+  transcripts and serves them at `GET /v1/jobs/{id}/transcript`; the Feed also shows each file
+  Claude reads. History, Policy, Repos and Settings move to `4`–`7`.
 
 ### Changed
 

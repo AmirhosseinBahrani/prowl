@@ -177,7 +177,14 @@ fn execute(
             Cmd::InstallService => Msg::ServiceInstalled(install_service(home).await),
             Cmd::LoadPolicies => Msg::Policies(client.policies().await.map_err(err)),
             Cmd::LoadPolicy { scope } => match parse_scope(&scope) {
-                Ok(scope) => Msg::Policy(client.policy(&scope).await.map_err(err)),
+                Ok(parsed) => match client.policy(&parsed).await {
+                    Err(prowld::client::ClientError::Status { status, .. })
+                        if status == 404 && scope != "global" =>
+                    {
+                        Msg::PolicyGone(scope)
+                    }
+                    result => Msg::Policy(result.map_err(err)),
+                },
                 Err(e) => Msg::Policy(Err(e)),
             },
             Cmd::LoadVersions { scope } => match parse_scope(&scope) {
@@ -209,6 +216,10 @@ fn execute(
                 Msg::RecentEvents(client.recent_events(500).await.map_err(err))
             }
             Cmd::LoadReviews => Msg::Reviews(client.reviews(None).await.map_err(err)),
+            Cmd::LoadJobs => Msg::Jobs(client.jobs().await.map_err(err)),
+            Cmd::LoadTranscript { job_id } => {
+                Msg::Transcript(job_id, client.transcript(job_id).await.map_err(err))
+            }
             Cmd::LoadQueue => Msg::QueueItems(client.queue().await.map_err(err)),
             Cmd::LoadSettings => Msg::Settings(client.settings().await.map_err(err)),
             Cmd::SaveSettings { patch } => {

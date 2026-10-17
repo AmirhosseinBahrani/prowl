@@ -254,6 +254,15 @@ impl ApiClient {
         self.get_json("/v1/jobs").await
     }
 
+    /// Everything a job's review runs saw and did, oldest first.
+    pub async fn transcript(
+        &self,
+        job_id: i64,
+    ) -> Result<Vec<crate::transcripts::TranscriptEntry>, ClientError> {
+        self.get_json(&format!("/v1/jobs/{job_id}/transcript"))
+            .await
+    }
+
     pub async fn watched_repos(&self) -> Result<Vec<Repo>, ClientError> {
         self.get_json("/v1/repos/watched").await
     }

@@ -30,6 +30,7 @@ pub(crate) struct AppState {
     pub repos: Repos,
     pub jobs: Jobs,
     pub reviews: Reviews,
+    pub transcripts: crate::transcripts::Transcripts,
     pub settings: crate::settings::SettingsStore,
     pub power: Power,
     pub claude: std::sync::Arc<crate::claude::Claude>,
@@ -63,6 +64,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/auth/token", post(sign_in_with_token))
         .route("/v1/poll", post(poll_now))
         .route("/v1/jobs", get(list_jobs))
+        .route("/v1/jobs/{id}/transcript", get(job_transcript))
         .route("/v1/reviews", get(list_reviews))
         .route("/v1/power", get(power_status))
         .route("/v1/costs", get(costs))
@@ -109,6 +111,19 @@ async fn poll_now(State(state): State<AppState>) -> Json<PollSummary> {
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<Job>>, ApiError> {
     Ok(Json(state.jobs.list().await.map_err(ApiError::internal)?))
+}
+
+async fn job_transcript(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<Vec<crate::transcripts::TranscriptEntry>>, ApiError> {
+    Ok(Json(
+        state
+            .transcripts
+            .list(id)
+            .await
+            .map_err(ApiError::internal)?,
+    ))
 }
 
 #[derive(Deserialize)]

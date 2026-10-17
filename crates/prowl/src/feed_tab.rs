@@ -184,6 +184,10 @@ pub fn describe(event: &Event) -> (Tone, String) {
         "pr.enqueued" => (Normal, format!("queued for review: {}", s("title"))),
         "pr.gated_out" => (Dim, format!("not reviewing: {}", words("reason"))),
         "review.started" => (Normal, "reviewing with Claude…".into()),
+        "review.tool" => (
+            Dim,
+            format!("  {} {}", s("tool").to_lowercase(), s("target")),
+        ),
         "review.output" => (
             Dim,
             format!("  {}", s("text").lines().next().unwrap_or("").trim()),

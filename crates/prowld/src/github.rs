@@ -194,6 +194,12 @@ pub(crate) struct InlineComment {
 pub(crate) struct Submitted {
     pub id: i64,
     pub html_url: String,
+    /// What was posted, as GitHub echoes it back.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// For reviews: `COMMENTED`, `APPROVED`, `CHANGES_REQUESTED`.
+    #[serde(default)]
+    pub state: Option<String>,
 }
 
 /// A review someone submitted on a PR.

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::auth::Auth;
-use crate::claude::{Claude, ClaudeError};
+use crate::claude::{Claude, ClaudeError, StreamItem};
 use crate::decider::{self, Decision};
 use crate::events::EventBus;
 use crate::github::{GitHub, GitHubError, PullRequest};
@@ -21,6 +21,7 @@ use crate::queue::Queue;
 use crate::review::{self, ReviewOutput};
 use crate::reviews::{NewReview, Reviews};
 use crate::settings::SettingsStore;
+use crate::transcripts::{self, Transcripts};
 use crate::workspace::{Checkout, Workspace};
 
 const TICK: Duration = Duration::from_millis(250);
@@ -30,6 +31,8 @@ const DEFER: Duration = Duration::from_secs(60);
 pub mod kind {
     pub const STARTED: &str = "review.started";
     pub const OUTPUT: &str = "review.output";
+    /// Claude used a tool: `tool`, `target` (the file or pattern).
+    pub const TOOL: &str = "review.tool";
     pub const FINISHED: &str = "review.finished";
     pub const FAILED: &str = "review.failed";
     pub const CANCELLED: &str = "job.cancelled";
@@ -57,6 +60,7 @@ struct Inner {
     github: GitHub,
     queue: Queue,
     publications: Publications,
+    transcripts: Transcripts,
     settings: SettingsStore,
     retry: RetrySettings,
     /// Budget day (its start, Unix ms) for which `budget.reached` was announced.
@@ -77,6 +81,7 @@ pub(crate) struct WorkerParts {
     pub github: GitHub,
     pub queue: Queue,
     pub publications: Publications,
+    pub transcripts: Transcripts,
     pub settings: SettingsStore,
     pub retry: RetrySettings,
     pub active: Arc<std::sync::atomic::AtomicUsize>,
@@ -97,6 +102,7 @@ impl Worker {
                 github: parts.github,
                 queue: parts.queue,
                 publications: parts.publications,
+                transcripts: parts.transcripts,
                 settings: parts.settings,
                 retry: parts.retry,
                 budget_reported: std::sync::Mutex::new(None),
@@ -402,9 +408,41 @@ impl Worker {
             serde_json::json!({ "policy_version_id": policy.version_id }),
         )
         .await;
+        let mut material_files: Vec<String> = std::fs::read_dir(&checkout.material)
+            .map(|dir| {
+                dir.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        material_files.sort();
+        self.record(
+            job,
+            transcripts::kind::CONTEXT,
+            serde_json::json!({
+                "prompt": message,
+                "model": inner.settings.get().claude_model,
+                "policy_scope": policy.scope,
+                "policy_version_id": policy.version_id,
+                "head_sha": job.head_sha,
+                "base": format!("{}@{}", pr.base.ref_name, pr.base.sha),
+                "material_dir": material,
+                "material_files": material_files,
+                "tools": ["Read", "Grep", "Glob"],
+            }),
+        )
+        .await;
         let started = Instant::now();
         let outcome = self.ask(job, &checkout, &message, budget).await;
         inner.workspace.remove(&job.repo, &checkout).await;
+        if let Err(e) = &outcome {
+            self.record(
+                job,
+                transcripts::kind::ERROR,
+                serde_json::json!({ "message": e.to_string() }),
+            )
+            .await;
+        }
         let (answer, output, cost) = outcome?;
         Ok(ClaudeRun {
             policy,
@@ -661,6 +699,16 @@ impl Worker {
             policy_version_id,
             agent_verdicts: inner.settings.get().agent_verdicts,
         };
+        self.record(
+            job,
+            transcripts::kind::DECISION,
+            serde_json::json!({
+                "decision": verdict.decision,
+                "reasons": verdict.reasons,
+                "summary": publish::describe(verdict.decision, &verdict.reasons),
+            }),
+        )
+        .await;
         let mut prior = inner.publications.prior(&job.repo, job.pr_number).await?;
         let submitted = publish::publish_result(
             &inner.github,
@@ -686,6 +734,17 @@ impl Worker {
             .reviews
             .set_published(review_id, submitted.id, &submitted.html_url)
             .await?;
+        self.record(
+            job,
+            transcripts::kind::PUBLISHED,
+            serde_json::json!({
+                "as": if verdict.decision == Decision::AgentOnly { "review" } else { "comment" },
+                "state": submitted.state,
+                "url": submitted.html_url,
+                "body": submitted.body,
+            }),
+        )
+        .await;
         // Only once the comment link is stored, so the queue never shows an item without it.
         if verdict.decision == Decision::NeedsHuman {
             inner
@@ -728,11 +787,18 @@ impl Worker {
         let first = self.ask_once(job, checkout, message, None, budget).await?;
         let mut cost = first.cost_usd;
         let parsed = parse_answer(&first);
+        self.record_result(job, &first, &parsed).await;
         let Err(problem) = parsed else {
             return Ok((first.text, parsed, cost));
         };
         tracing::info!(job = job.id, %problem, "review answer invalid; asking Claude to repair it");
         let repair = prompt::repair_message(&problem);
+        self.record(
+            job,
+            transcripts::kind::REPAIR,
+            serde_json::json!({ "prompt": repair }),
+        )
+        .await;
         let second = match &first.session_id {
             Some(session) => {
                 self.ask_once(job, checkout, &repair, Some(session), budget)
@@ -754,6 +820,7 @@ impl Worker {
             (a, b) => a.or(b),
         };
         let parsed = parse_answer(&second);
+        self.record_result(job, &second, &parsed).await;
         Ok((second.text, parsed, cost))
     }
 
@@ -765,15 +832,13 @@ impl Worker {
         resume: Option<&str>,
         budget: Option<f64>,
     ) -> Result<crate::claude::ClaudeAnswer, ClaudeError> {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamItem>();
         let forward = {
             let this = self.clone();
             let job = job.clone();
             tokio::spawn(async move {
-                while let Some(text) = rx.recv().await {
-                    let text: String = text.chars().take(4000).collect();
-                    this.emit(kind::OUTPUT, &job, serde_json::json!({ "text": text }))
-                        .await;
+                while let Some(item) = rx.recv().await {
+                    this.on_stream_item(&job, item).await;
                 }
             })
         };
@@ -795,14 +860,90 @@ impl Worker {
                 prompt,
                 resume,
                 &options,
-                |text| {
-                    let _ = tx.send(text.to_owned());
+                |item| {
+                    let _ = tx.send(item);
                 },
             )
             .await;
         drop(tx);
         let _ = forward.await;
         result
+    }
+
+    /// Records what Claude did in the transcript and tells the Feed.
+    async fn on_stream_item(&self, job: &Job, item: StreamItem) {
+        match item {
+            StreamItem::Text(text) => {
+                self.record(
+                    job,
+                    transcripts::kind::ASSISTANT,
+                    serde_json::json!({ "text": text }),
+                )
+                .await;
+                let text: String = text.chars().take(4000).collect();
+                self.emit(kind::OUTPUT, job, serde_json::json!({ "text": text }))
+                    .await;
+            }
+            StreamItem::ToolUse { id, name, input } => {
+                let target = ["file_path", "path", "pattern"]
+                    .iter()
+                    .find_map(|key| input.get(*key).and_then(|v| v.as_str()))
+                    .unwrap_or_default()
+                    .to_owned();
+                self.record(
+                    job,
+                    transcripts::kind::TOOL_USE,
+                    serde_json::json!({ "id": id, "name": name, "input": input }),
+                )
+                .await;
+                self.emit(
+                    kind::TOOL,
+                    job,
+                    serde_json::json!({ "tool": name, "target": target }),
+                )
+                .await;
+            }
+            StreamItem::ToolResult {
+                id,
+                content,
+                is_error,
+            } => {
+                self.record(
+                    job,
+                    transcripts::kind::TOOL_RESULT,
+                    serde_json::json!({ "id": id, "content": content, "is_error": is_error }),
+                )
+                .await;
+            }
+        }
+    }
+
+    async fn record(&self, job: &Job, kind: &str, content: serde_json::Value) {
+        self.inner
+            .transcripts
+            .append(job.id, job.attempts, kind, content)
+            .await;
+    }
+
+    async fn record_result(
+        &self,
+        job: &Job,
+        answer: &crate::claude::ClaudeAnswer,
+        parsed: &Result<ReviewOutput, String>,
+    ) {
+        let mut content = serde_json::json!({
+            "cost_usd": answer.cost_usd,
+            "duration_ms": answer.duration_ms,
+            "valid": parsed.is_ok(),
+        });
+        match parsed {
+            Ok(output) => content["output"] = serde_json::to_value(output).unwrap_or_default(),
+            Err(reason) => {
+                content["invalid_reason"] = reason.clone().into();
+                content["text"] = answer.text.clone().into();
+            }
+        }
+        self.record(job, transcripts::kind::RESULT, content).await;
     }
 
     async fn emit(&self, kind: &str, job: &Job, mut payload: serde_json::Value) {

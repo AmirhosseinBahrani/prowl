@@ -311,7 +311,7 @@ async fn a_set_up_install_opens_straight_on_the_main_screen() {
 
     tui.wait_for("1 Queue").await;
     tui.wait_for("0 awaiting you").await;
-    tui.press(KeyCode::Char('5'));
+    tui.press(KeyCode::Char('6'));
     tui.wait_for("[x] acme/api").await;
     tui.press(KeyCode::Char('?'));
     tui.wait_for("watch / unwatch a repository").await;
@@ -346,7 +346,7 @@ async fn on_policy_tab(
     h.client().watch("acme/api").await.unwrap();
     let (tui, opened) = Tui::with_editor(&h, addition);
     tui.wait_for("1 Queue").await;
-    tui.press(KeyCode::Char('4'));
+    tui.press(KeyCode::Char('5'));
     tui.wait_for("global · version").await;
     (h, tui, opened)
 }
@@ -552,7 +552,7 @@ async fn the_feed_shows_past_and_live_activity() {
 async fn history_lists_reviews_with_details_and_opens_them() {
     let (h, tui) = after_a_review().await;
 
-    tui.press(KeyCode::Char('3'));
+    tui.press(KeyCode::Char('4'));
 
     tui.wait_for("acme/api#7").await;
     tui.wait_for("agent").await;
@@ -573,6 +573,34 @@ async fn history_lists_reviews_with_details_and_opens_them() {
     }
     tui.press(KeyCode::Esc);
     tui.wait_for("severity").await;
+    tui.quit().await;
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn the_reviews_tab_shows_the_conversation_and_what_was_posted() {
+    let (h, tui) = after_a_review().await;
+
+    tui.press(KeyCode::Char('3'));
+
+    tui.wait_for("✓ done").await;
+    assert!(tui.screen().contains("acme/api#7"));
+    // The outcome comes from the reviews, which load alongside the jobs.
+    tui.wait_for("agent").await;
+    tui.press(KeyCode::Enter);
+    tui.wait_for("── Context given to Claude ──").await;
+    tui.wait_for("│ <role>").await;
+    assert!(
+        tui.screen()
+            .contains("prepared files: commits.txt, pr.diff")
+    );
+    tui.press(KeyCode::Char('G'));
+    tui.wait_for("── Posted to GitHub ──").await;
+    tui.wait_for("comment review: https://github.com/acme/api/pull/7#pullrequestreview-907")
+        .await;
+    assert!(tui.screen().contains("Claude: Reading the diff…"));
+    tui.press(KeyCode::Esc);
+    tui.wait_for("outcome").await;
     tui.quit().await;
     h.shutdown().await.unwrap();
 }
@@ -686,7 +714,7 @@ async fn the_settings_tab_changes_settings_live() {
     let tui = Tui::of(&h);
     tui.wait_for("1 Queue").await;
 
-    tui.press(KeyCode::Char('6'));
+    tui.press(KeyCode::Char('7'));
     tui.wait_for("Daily budget (USD)").await;
     // Down to "Daily budget (USD)" (the 6th setting) and set it.
     for _ in 0..5 {

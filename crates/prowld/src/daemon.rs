@@ -162,6 +162,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         github: github.clone(),
         queue: queue.clone(),
         publications: Publications::new(db.clone()),
+        transcripts: crate::transcripts::Transcripts::new(db.clone()),
         settings: settings.clone(),
         retry: RetrySettings {
             base: config.retry_base,
@@ -185,6 +186,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         repos,
         jobs,
         reviews,
+        transcripts: crate::transcripts::Transcripts::new(db.clone()),
         settings,
         power,
         claude: std::sync::Arc::new(claude_for(&config)),

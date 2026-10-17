@@ -11,6 +11,8 @@ pub mod policy_tab;
 pub(crate) mod policy_ui;
 pub mod queue_tab;
 mod queue_ui;
+pub mod reviews_tab;
+mod reviews_ui;
 pub mod runtime;
 pub mod settings_tab;
 mod settings_ui;

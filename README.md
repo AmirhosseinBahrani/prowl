@@ -21,7 +21,7 @@ from a terminal UI that is just as happy over SSH.
 
 ```
  PRowl  pull-request reviews, around the clock
- 1 Queue 2 │ 2 Feed │ 3 History │ 4 Policy │ 5 Repos │ 6 Settings
+ 1 Queue 2 │ 2 Feed │ 3 Reviews │ 4 History │ 5 Policy │ 6 Repos │ 7 Settings
 ┌ Queue ───────────────────────────────────────────────────────────────────────────┐
 │severity   PR                title                         why               waiting │
 │ critical  acme/api#412      Rotate session tokens         [AUTH], risk 92   12m    │
@@ -141,10 +141,11 @@ With these, start the background service yourself: `prowld service install`.
 |---|---|
 | **1 Queue** | PRs waiting for *your* review, riskiest first. Open one for the reasons, the agent's notes and the diff; `a` approve, `r` request changes, `d` dismiss, `o` open on GitHub. |
 | **2 Feed** | Everything PRowl does, live, in plain language. |
-| **3 History** | Every past review — who decided, severity, matched rules, cost, time taken. |
-| **4 Policy** | Your Review Policy and per-repository overrides; `e` edits in your `$EDITOR`, `h` shows versions and diffs, `t` dry-runs a PR. |
-| **5 Repos** | Choose which repositories PRowl watches. |
-| **6 Settings** | Change behaviour live — budgets, concurrency, keep-awake, file rules, … |
+| **3 Reviews** | Reviews running now and before. Open one to see everything: the context and prompt Claude was given, its messages and every file it read or searched (live while it runs), its answer, PRowl's decision and exactly what was posted to GitHub. |
+| **4 History** | Every past review — who decided, severity, matched rules, cost, time taken. |
+| **5 Policy** | Your Review Policy and per-repository overrides; `e` edits in your `$EDITOR`, `h` shows versions and diffs, `t` dry-runs a PR. |
+| **6 Repos** | Choose which repositories PRowl watches. |
+| **7 Settings** | Change behaviour live — budgets, concurrency, keep-awake, file rules, … |
 
 Press `?` anywhere for all keys. For scripts there's also a plain command line:
 
