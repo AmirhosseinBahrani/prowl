@@ -26,6 +26,21 @@ pub mod kind {
     pub const GATED_OUT: &str = "pr.gated_out";
 }
 
+/// Why a review the user asked for couldn't be queued.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ManualError {
+    #[error("connect a GitHub account first")]
+    NotConnected,
+    #[error("no such pull request (or the account can't see it)")]
+    NotFound,
+    #[error("the pull request isn't open")]
+    NotOpen,
+    #[error("could not read the pull request: {0}")]
+    GitHub(String),
+    #[error(transparent)]
+    Internal(#[from] anyhow::Error),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PollSummary {
     /// Why the poll did nothing, if it did nothing (`not_connected`, `no_watched_repos`,
@@ -369,6 +384,20 @@ impl Poller {
         if pr.head.sha != job.head_sha {
             return Ok(Recheck::Cancel("superseded_by_newer_commit".into()));
         }
+        // Asked for by the user: review requests and drafts don't matter (posting a review
+        // clears the request), but GitHub won't take a review of a closed or your own PR.
+        if job.manual() {
+            return Ok(if pr.state != "open" {
+                Recheck::Cancel("pr_not_open".into())
+            } else if pr.user.login.eq_ignore_ascii_case(&login) {
+                Recheck::Cancel("own_pr".into())
+            } else {
+                Recheck::Proceed {
+                    pr: Box::new(pr),
+                    reviewer: login,
+                }
+            });
+        }
         let users: Vec<&str> = pr
             .requested_reviewers
             .iter()
@@ -403,6 +432,71 @@ impl Poller {
                     .unwrap_or_else(|| format!("{reason:?}")),
             ),
         })
+    }
+
+    /// Queues a job for `repo#number` at its current commit, whatever happened to it before:
+    /// `kind` is `kinds::RERUN` (review it again) or `kinds::VERIFY`.
+    pub(crate) async fn enqueue_manual(
+        &self,
+        repo: &str,
+        number: u64,
+        kind: &str,
+    ) -> Result<Job, ManualError> {
+        let token = self
+            .inner
+            .auth
+            .token()
+            .await
+            .ok_or(ManualError::NotConnected)?;
+        let pr = self
+            .inner
+            .github
+            .pull_request(&token, repo, number)
+            .await
+            .map_err(|e| match e {
+                GitHubError::Status { status, .. } if status == reqwest::StatusCode::NOT_FOUND => {
+                    ManualError::NotFound
+                }
+                other => ManualError::GitHub(other.to_string()),
+            })?;
+        if pr.state != "open" {
+            return Err(ManualError::NotOpen);
+        }
+        let id = self
+            .inner
+            .jobs
+            .enqueue_manual(
+                &NewJob {
+                    repo,
+                    pr_number: number,
+                    head_sha: &pr.head.sha,
+                    title: &pr.title,
+                    author: &pr.user.login,
+                    html_url: &pr.html_url,
+                },
+                kind,
+            )
+            .await?;
+        let _ = self
+            .inner
+            .events
+            .emit(
+                kind::ENQUEUED,
+                serde_json::json!({
+                    "job_id": id,
+                    "repo": repo,
+                    "pr": number,
+                    "head_sha": pr.head.sha,
+                    "title": pr.title,
+                    "manual": kind,
+                }),
+            )
+            .await;
+        self.inner
+            .jobs
+            .get(id)
+            .await?
+            .ok_or_else(|| ManualError::Internal(anyhow::anyhow!("job {id} vanished")))
     }
 
     async fn report_gated(&self, repo: &str, number: u64, sha: &str, reason: GateReason) {

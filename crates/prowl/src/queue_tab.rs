@@ -132,6 +132,14 @@ impl QueueTab {
                     }];
                 }
             }
+            KeyCode::Char('R') => {
+                if let Some(item) = self.current() {
+                    return vec![Cmd::Rerun {
+                        repo: item.repo.clone(),
+                        pr: item.pr_number,
+                    }];
+                }
+            }
             KeyCode::Esc => self.detail = None,
             KeyCode::Enter if self.detail.is_none() => {
                 if let Some(item) = self.items.get(self.selected) {

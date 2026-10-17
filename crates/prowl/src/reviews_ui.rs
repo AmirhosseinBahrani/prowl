@@ -20,7 +20,7 @@ pub fn draw(tab: &ReviewsTab, frame: &mut Frame, area: Rect) {
         draw_open(tab, open, frame, body);
         frame.render_widget(
             theme::hints(
-                " ↑↓ scroll · [space/p] page · [g/G] top/end (follows live) · [o] open on GitHub · [esc] back",
+                " ↑↓ scroll · [space/p] page · [g/G] top/end (follows live) · [o] open · [R] re-review · [esc] back",
             ),
             footer,
         );
@@ -69,7 +69,7 @@ pub fn draw(tab: &ReviewsTab, frame: &mut Frame, area: Rect) {
     }
     frame.render_widget(
         theme::hints(
-            " ↑↓ select · [enter] conversation & result · [o] open on GitHub · [r] refresh",
+            " ↑↓ select · [enter] conversation & result · [o] open on GitHub · [R] re-review · [r] refresh",
         ),
         footer,
     );

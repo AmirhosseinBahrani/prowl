@@ -46,6 +46,11 @@ enum Command {
         /// owner/repo#number
         pr: String,
     },
+    /// Review a pull request again at its current commit.
+    Rerun {
+        /// owner/repo#number
+        pr: String,
+    },
 }
 
 #[tokio::main]
@@ -73,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
             Command::Dismiss { pr } => {
                 prowl::cli::resolve(&client, &pr, QueueAction::Dismiss, "").await?
             }
+            Command::Rerun { pr } => prowl::cli::rerun(&client, &pr).await?,
         };
         print!("{output}");
         return Ok(());

@@ -30,6 +30,18 @@ pub async fn queue(client: &ApiClient) -> anyhow::Result<String> {
     Ok(out)
 }
 
+/// Queues `owner/repo#n` to be reviewed again at its current commit.
+pub async fn rerun(client: &ApiClient, pr: &str) -> anyhow::Result<String> {
+    let (repo, number) = parse_pr_ref(pr)
+        .ok_or_else(|| anyhow::anyhow!("expected owner/repo#number, got {pr:?}"))?;
+    let job = client.rerun(&repo, number).await?;
+    Ok(format!(
+        "Re-reviewing {repo}#{number} at {} (job {}). Follow it in prowl's Reviews tab.\n",
+        job.head_sha.chars().take(7).collect::<String>(),
+        job.id
+    ))
+}
+
 /// Approves, requests changes on, or dismisses `owner/repo#n` from the queue.
 pub async fn resolve(
     client: &ApiClient,

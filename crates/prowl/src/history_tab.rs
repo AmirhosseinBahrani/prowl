@@ -71,6 +71,14 @@ impl HistoryTab {
                 self.filter.clear();
                 self.selected = 0;
             }
+            KeyCode::Char('R') => {
+                if let Some(review) = self.visible().get(self.selected) {
+                    return vec![Cmd::Rerun {
+                        repo: review.repo.clone(),
+                        pr: review.pr_number,
+                    }];
+                }
+            }
             KeyCode::Char('o') => {
                 if let Some(review) = self.visible().get(self.selected) {
                     let url = review

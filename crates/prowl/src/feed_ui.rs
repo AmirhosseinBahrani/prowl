@@ -170,7 +170,7 @@ pub fn draw_history(history: &HistoryTab, status: &StatusBar, frame: &mut Frame,
             "   enter apply · esc cancel".dim(),
         ]),
         None => crate::theme::hints(
-            " ↑↓ select · [enter] details · [o] open on GitHub · [f] filter · [c] clear",
+            " ↑↓ select · [enter] details · [o] open on GitHub · [R] re-review · [f] filter · [c] clear",
         ),
     };
     frame.render_widget(foot, footer);

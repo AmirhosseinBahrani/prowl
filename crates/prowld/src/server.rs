@@ -67,6 +67,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/auth/device", post(start_device_flow))
         .route("/v1/auth/token", post(sign_in_with_token))
         .route("/v1/poll", post(poll_now))
+        .route("/v1/rerun", post(rerun))
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/jobs/{id}/transcript", get(job_transcript))
         .route("/v1/reviews", get(list_reviews))
@@ -112,6 +113,38 @@ async fn status(State(state): State<AppState>) -> Json<Status> {
 /// Runs a poll immediately (also used by the UI's "check now").
 async fn poll_now(State(state): State<AppState>) -> Json<PollSummary> {
     Json(state.poller.poll_once().await)
+}
+
+#[derive(Deserialize)]
+struct PrRef {
+    repo: String,
+    pr: u64,
+}
+
+/// Reviews a pull request again at its current commit, whatever happened to it before.
+async fn rerun(
+    State(state): State<AppState>,
+    Json(body): Json<PrRef>,
+) -> Result<(StatusCode, Json<Job>), ApiError> {
+    crate::policy::Scope::parse_repo(&body.repo)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    state
+        .poller
+        .enqueue_manual(&body.repo, body.pr, crate::jobs::kinds::RERUN)
+        .await
+        .map(|job| (StatusCode::ACCEPTED, Json(job)))
+        .map_err(manual_error)
+}
+
+pub(crate) fn manual_error(e: crate::poller::ManualError) -> ApiError {
+    use crate::poller::ManualError::*;
+    match e {
+        NotConnected => ApiError(StatusCode::PRECONDITION_FAILED, e.to_string()),
+        NotFound => ApiError(StatusCode::NOT_FOUND, e.to_string()),
+        NotOpen => ApiError(StatusCode::CONFLICT, e.to_string()),
+        GitHub(_) => ApiError(StatusCode::BAD_GATEWAY, e.to_string()),
+        Internal(e) => ApiError::internal(e),
+    }
 }
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<Vec<Job>>, ApiError> {
