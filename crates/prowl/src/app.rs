@@ -10,6 +10,7 @@ use crate::feed_tab::FeedTab;
 use crate::history_tab::HistoryTab;
 use crate::policy_tab::{DryRunState, PolicyTab};
 use crate::queue_tab::{QueueAction, QueueTab};
+use crate::reviews_tab::ReviewsTab;
 use crate::settings_tab::SettingsTab;
 
 pub const PER_PAGE: usize = 15;
@@ -30,6 +31,7 @@ pub enum Screen {
 pub enum Tab {
     Queue,
     Feed,
+    Reviews,
     History,
     Policy,
     Repos,
@@ -37,9 +39,10 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Queue,
         Tab::Feed,
+        Tab::Reviews,
         Tab::History,
         Tab::Policy,
         Tab::Repos,
@@ -50,6 +53,7 @@ impl Tab {
         match self {
             Tab::Queue => "Queue",
             Tab::Feed => "Feed",
+            Tab::Reviews => "Reviews",
             Tab::History => "History",
             Tab::Policy => "Policy",
             Tab::Repos => "Repos",
@@ -110,6 +114,12 @@ pub enum Msg {
     DryRunDone(Result<DryRun, String>),
     RecentEvents(Result<Vec<Event>, String>),
     Reviews(Result<Vec<prowld::Review>, String>),
+    Jobs(Result<Vec<prowld::Job>, String>),
+    /// The transcript of this job.
+    Transcript(
+        i64,
+        Result<Vec<prowld::transcripts::TranscriptEntry>, String>,
+    ),
     Opened(Result<(), String>),
     QueueItems(Result<Vec<prowld::QueueItem>, String>),
     QueueDetail(Result<prowld::QueueDetail, String>),
@@ -175,6 +185,10 @@ pub enum Cmd {
     },
     LoadRecentEvents,
     LoadReviews,
+    LoadJobs,
+    LoadTranscript {
+        job_id: i64,
+    },
     OpenUrl {
         url: String,
     },
@@ -213,6 +227,7 @@ pub struct App {
     pub queue: QueueTab,
     pub settings: SettingsTab,
     pub history: HistoryTab,
+    pub reviews: ReviewsTab,
     pub status: StatusBar,
     /// A one-line message shown above the status bar.
     pub notice: Option<String>,
@@ -241,6 +256,7 @@ impl App {
             queue: QueueTab::default(),
             settings: SettingsTab::default(),
             history: HistoryTab::default(),
+            reviews: ReviewsTab::default(),
             status: StatusBar::default(),
             notice: None,
             help: false,
@@ -413,7 +429,20 @@ impl App {
                 vec![]
             }
             Msg::Reviews(Ok(reviews)) => {
+                self.reviews.reviews = reviews.clone();
                 self.history.on_reviews(reviews);
+                vec![]
+            }
+            Msg::Jobs(Ok(jobs)) => self.reviews.on_jobs(jobs),
+            Msg::Jobs(Err(e)) => {
+                self.reviews.on_jobs_failed();
+                self.notice = Some(e);
+                vec![]
+            }
+            Msg::Transcript(job_id, Ok(entries)) => self.reviews.on_transcript(job_id, entries),
+            Msg::Transcript(job_id, Err(e)) => {
+                self.reviews.on_transcript_failed(job_id);
+                self.notice = Some(e);
                 vec![]
             }
             Msg::Opened(Ok(())) => vec![],
@@ -488,6 +517,12 @@ impl App {
         }
         if event.kind.starts_with("queue.") {
             cmds.push(Cmd::LoadQueue);
+        }
+        let job_id = event.payload.get("job_id").and_then(|v| v.as_i64());
+        for cmd in self.reviews.on_event(&event.kind, job_id) {
+            if !cmds.contains(&cmd) {
+                cmds.push(cmd);
+            }
         }
         cmds
     }
@@ -647,7 +682,9 @@ impl App {
             KeyCode::BackTab | KeyCode::Left => {
                 Some((self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len())
             }
-            KeyCode::Char(c @ '1'..='6') => Some(c as usize - '1' as usize),
+            KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < Tab::ALL.len() => {
+                Some(c as usize - '1' as usize)
+            }
             _ => None,
         };
         if let Some(i) = next {
@@ -659,6 +696,7 @@ impl App {
                 Tab::Policy => vec![Cmd::LoadPolicies],
                 Tab::Feed if !self.feed.loaded => vec![Cmd::LoadRecentEvents],
                 Tab::History => vec![Cmd::LoadReviews],
+                Tab::Reviews => self.reviews.refresh(),
                 Tab::Queue => vec![Cmd::LoadQueue],
                 Tab::Settings => vec![Cmd::LoadSettings],
                 _ => vec![],
@@ -669,6 +707,7 @@ impl App {
             Tab::Policy => self.policy.on_key(key),
             Tab::Feed => self.feed.on_key(key),
             Tab::History => self.history.on_key(key),
+            Tab::Reviews => self.reviews.on_key(key),
             Tab::Queue => self.queue.on_key(key),
             Tab::Settings => self.settings.on_key(key),
         }
@@ -1039,7 +1078,7 @@ mod tests {
         app.update(key(KeyCode::BackTab));
         app.update(key(KeyCode::BackTab));
         assert_eq!(app.tab, Tab::Settings);
-        let cmds = app.update(key(KeyCode::Char('5')));
+        let cmds = app.update(key(KeyCode::Char('6')));
         assert_eq!(app.tab, Tab::Repos);
         assert!(
             matches!(&cmds[..], [Cmd::LoadRepos { .. }]),

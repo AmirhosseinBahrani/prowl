@@ -86,6 +86,41 @@ impl ClaudeResponse {
     pub fn review(review: &serde_json::Value) -> Self {
         Self::answer(&review.to_string())
     }
+
+    /// Like [`Self::review`], but Claude first reads the diff with the Read tool.
+    pub fn review_after_reading(review: &serde_json::Value, file: &str, contents: &str) -> Self {
+        let lines = [
+            serde_json::json!({ "type": "system", "subtype": "init", "session_id": "session-1" }),
+            serde_json::json!({
+                "type": "assistant", "session_id": "session-1",
+                "message": { "content": [
+                    { "type": "text", "text": "Let me read the diff." },
+                    { "type": "tool_use", "id": "toolu_1", "name": "Read",
+                      "input": { "file_path": file } }
+                ] }
+            }),
+            serde_json::json!({
+                "type": "user", "session_id": "session-1",
+                "message": { "content": [
+                    { "type": "tool_result", "tool_use_id": "toolu_1",
+                      "content": [{ "type": "text", "text": contents }] }
+                ] }
+            }),
+            serde_json::json!({
+                "type": "assistant", "session_id": "session-1",
+                "message": { "content": [{ "type": "text", "text": "Looks contained." }] }
+            }),
+            serde_json::json!({
+                "type": "result", "subtype": "success", "is_error": false,
+                "result": review.to_string(), "session_id": "session-1",
+                "total_cost_usd": 0.07, "duration_ms": 4200
+            }),
+        ];
+        Self {
+            stdout: lines.iter().map(|l| format!("{l}\n")).collect(),
+            ..Default::default()
+        }
+    }
 }
 
 impl FakeClaude {

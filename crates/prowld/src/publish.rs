@@ -151,6 +151,8 @@ pub(crate) async fn publish_result(
                 Some(r) => Submitted {
                     id: r.id,
                     html_url: r.html_url.unwrap_or_default(),
+                    body: r.body,
+                    state: Some(r.state),
                 },
                 None => agent_only(github, token, target, review).await?,
             };

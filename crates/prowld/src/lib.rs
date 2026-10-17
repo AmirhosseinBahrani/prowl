@@ -32,6 +32,7 @@ pub mod service;
 pub mod settings;
 mod store;
 mod tools;
+pub mod transcripts;
 pub mod transport;
 pub mod worker;
 mod workspace;

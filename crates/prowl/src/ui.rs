@@ -376,6 +376,7 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
         Tab::Queue => crate::queue_ui::draw(&app.queue, frame, inner),
         Tab::Settings => crate::settings_ui::draw(&app.settings, frame, inner),
         Tab::History => crate::feed_ui::draw_history(&app.history, &app.status, frame, inner),
+        Tab::Reviews => crate::reviews_ui::draw(&app.reviews, frame, inner),
     }
 }
 
@@ -455,7 +456,7 @@ fn help(frame: &mut Frame, area: Rect) {
             Span::raw("        next / previous tab (shift-tab goes back too)"),
         ]),
         Line::from(vec![
-            theme::key("  1–6"),
+            theme::key("  1–7"),
             Span::raw("               jump to a tab"),
         ]),
         Line::from(vec![theme::key("  ↑↓ or j k"), Span::raw("         move")]),
@@ -473,6 +474,9 @@ fn help(frame: &mut Frame, area: Rect) {
             Span::raw("           in a PR: ↑↓ scroll diff · ] [ next/previous file · esc back"),
         ]),
         Line::from("  Feed tab: space pause/follow · f filter · c clear · p show polls"),
+        Line::from(
+            "  Reviews tab: enter conversation & result · g/G top/end (follows live) · o open",
+        ),
         Line::from("  History tab: enter details · o open on GitHub · f filter"),
         Line::from("  Policy tab: e edit · h history · r restore · n new override"),
         Line::from(vec![

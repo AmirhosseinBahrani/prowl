@@ -209,6 +209,10 @@ fn execute(
                 Msg::RecentEvents(client.recent_events(500).await.map_err(err))
             }
             Cmd::LoadReviews => Msg::Reviews(client.reviews(None).await.map_err(err)),
+            Cmd::LoadJobs => Msg::Jobs(client.jobs().await.map_err(err)),
+            Cmd::LoadTranscript { job_id } => {
+                Msg::Transcript(job_id, client.transcript(job_id).await.map_err(err))
+            }
             Cmd::LoadQueue => Msg::QueueItems(client.queue().await.map_err(err)),
             Cmd::LoadSettings => Msg::Settings(client.settings().await.map_err(err)),
             Cmd::SaveSettings { patch } => {

@@ -40,6 +40,25 @@ pub(crate) struct RunOptions {
     pub max_budget_usd: Option<f64>,
 }
 
+/// Something Claude did while reviewing, as it streams in.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum StreamItem {
+    /// Text Claude wrote.
+    Text(String),
+    /// A tool Claude called.
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    /// What that tool returned.
+    ToolResult {
+        id: String,
+        content: String,
+        is_error: bool,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ClaudeAnswer {
     /// The final text answer.
@@ -48,6 +67,8 @@ pub(crate) struct ClaudeAnswer {
     pub structured: Option<serde_json::Value>,
     pub session_id: Option<String>,
     pub cost_usd: Option<f64>,
+    /// As reported by the CLI.
+    pub duration_ms: Option<i64>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -83,8 +104,9 @@ impl Claude {
         }
     }
 
-    /// Sends `prompt` (on stdin) and returns the final answer. `on_text` receives assistant
-    /// text as it streams. `resume` continues an earlier session (used for repair requests).
+    /// Sends `prompt` (on stdin) and returns the final answer. `on_item` receives Claude's text,
+    /// tool calls and tool results as they stream. `resume` continues an earlier session (used
+    /// for repair requests).
     pub(crate) async fn run(
         &self,
         cwd: &Path,
@@ -92,7 +114,7 @@ impl Claude {
         prompt: &str,
         resume: Option<&str>,
         options: &RunOptions,
-        mut on_text: impl FnMut(&str),
+        mut on_item: impl FnMut(StreamItem),
     ) -> Result<ClaudeAnswer, ClaudeError> {
         let bin = self.locate()?;
         let mut cmd = Command::new(&bin);
@@ -159,14 +181,10 @@ impl Claude {
                 if let Some(id) = event.get("session_id").and_then(|v| v.as_str()) {
                     session_id = Some(id.to_owned());
                 }
-                match event.get("type").and_then(|v| v.as_str()) {
-                    Some("assistant") => {
-                        for text in assistant_texts(&event) {
-                            on_text(text);
-                        }
-                    }
-                    Some("result") => answer = Some(event),
-                    _ => {}
+                if event.get("type").and_then(|v| v.as_str()) == Some("result") {
+                    answer = Some(event);
+                } else {
+                    stream_items(&event).into_iter().for_each(&mut on_item);
                 }
             }
             let status = child.wait().await?;
@@ -212,18 +230,55 @@ impl Claude {
                 .cloned(),
             session_id,
             cost_usd: result.get("total_cost_usd").and_then(|v| v.as_f64()),
+            duration_ms: result.get("duration_ms").and_then(|v| v.as_i64()),
         })
     }
 }
 
-fn assistant_texts(event: &serde_json::Value) -> impl Iterator<Item = &str> {
+/// Text and tool calls from an `assistant` event, tool results from a `user` event.
+fn stream_items(event: &serde_json::Value) -> Vec<StreamItem> {
+    let str_of = |v: &serde_json::Value, key: &str| {
+        v.get(key)
+            .and_then(|t| t.as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let role = event.get("type").and_then(|t| t.as_str());
     event
         .pointer("/message/content")
         .and_then(|c| c.as_array())
         .into_iter()
         .flatten()
-        .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("text"))
-        .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
+        .filter_map(
+            |block| match (role, block.get("type").and_then(|t| t.as_str())) {
+                (Some("assistant"), Some("text")) => Some(StreamItem::Text(str_of(block, "text"))),
+                (Some("assistant"), Some("tool_use")) => Some(StreamItem::ToolUse {
+                    id: str_of(block, "id"),
+                    name: str_of(block, "name"),
+                    input: block.get("input").cloned().unwrap_or_default(),
+                }),
+                (Some("user"), Some("tool_result")) => Some(StreamItem::ToolResult {
+                    id: str_of(block, "tool_use_id"),
+                    content: tool_result_text(block.get("content")),
+                    is_error: block.get("is_error").and_then(|e| e.as_bool()) == Some(true),
+                }),
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+/// A tool result's content: plain text, or the text parts of a list of blocks.
+fn tool_result_text(content: Option<&serde_json::Value>) -> String {
+    match content {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
 }
 
 /// Kills the CLI and everything it started.
