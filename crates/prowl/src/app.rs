@@ -120,6 +120,7 @@ pub enum Msg {
     Reviews(Result<Vec<prowld::Review>, String>),
     Jobs(Result<Vec<prowld::Job>, String>),
     Rerun(Result<prowld::Job, String>),
+    Verify(Result<prowld::Job, String>),
     /// The transcript of this job.
     Transcript(
         i64,
@@ -194,6 +195,11 @@ pub enum Cmd {
     LoadJobs,
     /// Review this PR again at its current commit.
     Rerun {
+        repo: String,
+        pr: u64,
+    },
+    /// Check this PR's findings were addressed and approve it if so.
+    Verify {
         repo: String,
         pr: u64,
     },
@@ -464,6 +470,18 @@ impl App {
             }
             Msg::Rerun(Err(e)) => {
                 self.notice = Some(format!("Couldn't re-review: {e}"));
+                vec![]
+            }
+            Msg::Verify(Ok(job)) => {
+                self.notice = Some(format!(
+                    "Verifying {}#{}: PRowl approves it if every finding was addressed — follow \
+                     it in the Reviews tab (3).",
+                    job.repo, job.pr_number
+                ));
+                self.reviews.refresh()
+            }
+            Msg::Verify(Err(e)) => {
+                self.notice = Some(format!("Couldn't verify: {e}"));
                 vec![]
             }
             Msg::Jobs(Err(e)) => {

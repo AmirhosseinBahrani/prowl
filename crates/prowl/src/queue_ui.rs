@@ -95,7 +95,7 @@ fn footer_line(tab: &QueueTab) -> Line<'static> {
         )
     } else {
         crate::theme::hints(
-            " [enter] open · [a] approve · [r] request changes · [d] dismiss · [o] open on GitHub · [R] re-review",
+            " [enter] open · [a] approve · [r] request changes · [d] dismiss · [o] open on GitHub · [R] re-review · [v] verify",
         )
     }
 }

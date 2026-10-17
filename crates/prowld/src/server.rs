@@ -26,6 +26,7 @@ use crate::reviews::{Review, Reviews};
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub auth: Auth,
+    pub github_api: crate::github::GitHub,
     pub policies: PolicyStore,
     pub repos: Repos,
     pub jobs: Jobs,
@@ -68,6 +69,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/auth/token", post(sign_in_with_token))
         .route("/v1/poll", post(poll_now))
         .route("/v1/rerun", post(rerun))
+        .route("/v1/verify", post(verify))
+        .route("/v1/threads", get(threads))
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/jobs/{id}/transcript", get(job_transcript))
         .route("/v1/reviews", get(list_reviews))
@@ -134,6 +137,46 @@ async fn rerun(
         .await
         .map(|job| (StatusCode::ACCEPTED, Json(job)))
         .map_err(manual_error)
+}
+
+/// Checks that the earlier review's findings were addressed and approves the PR if so.
+async fn verify(
+    State(state): State<AppState>,
+    Json(body): Json<PrRef>,
+) -> Result<(StatusCode, Json<Job>), ApiError> {
+    crate::policy::Scope::parse_repo(&body.repo)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+    state
+        .poller
+        .enqueue_manual(&body.repo, body.pr, crate::jobs::kinds::VERIFY)
+        .await
+        .map(|job| (StatusCode::ACCEPTED, Json(job)))
+        .map_err(manual_error)
+}
+
+#[derive(Deserialize)]
+struct ThreadsQuery {
+    repo: String,
+    pr: u64,
+}
+
+/// The pull request's review threads and whether each is resolved.
+async fn threads(
+    State(state): State<AppState>,
+    Query(q): Query<ThreadsQuery>,
+) -> Result<Json<Vec<crate::github::ReviewThread>>, ApiError> {
+    let token = state.auth.token().await.ok_or_else(|| {
+        ApiError(
+            StatusCode::PRECONDITION_FAILED,
+            "connect a GitHub account first".into(),
+        )
+    })?;
+    state
+        .github_api
+        .review_threads(&token, &q.repo, q.pr)
+        .await
+        .map(Json)
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, e.to_string()))
 }
 
 pub(crate) fn manual_error(e: crate::poller::ManualError) -> ApiError {

@@ -45,6 +45,7 @@ pub use daemon::{RunningDaemon, start};
 pub use decider::{Decision, Reason};
 pub use doctor::{ClaudeCheck, Doctor, ToolCheck};
 pub use events::Event;
+pub use github::ReviewThread;
 pub use jobs::Job;
 pub use notify::{Notifier, NotifierHook};
 pub use policy::{EffectivePolicy, PolicyRule, PolicySummary, PolicyVersion};

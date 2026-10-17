@@ -542,6 +542,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
         row("enter", "open: why it waits, the agent's notes, the diff"),
         row("a r d", "approve · request changes · dismiss"),
         row("o R", "open on GitHub · review it again"),
+        row("v", "verify fixes; approve if all were addressed"),
         row("↑↓ ] [ esc", "in a PR: scroll · next/previous file · back"),
         heading("2 Feed"),
         row("space f c p", "pause/follow · filter · clear · show polls"),

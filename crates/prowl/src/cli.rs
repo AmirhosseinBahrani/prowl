@@ -42,6 +42,19 @@ pub async fn rerun(client: &ApiClient, pr: &str) -> anyhow::Result<String> {
     ))
 }
 
+/// Checks `owner/repo#n`'s findings were addressed, approving it if so.
+pub async fn verify(client: &ApiClient, pr: &str) -> anyhow::Result<String> {
+    let (repo, number) = parse_pr_ref(pr)
+        .ok_or_else(|| anyhow::anyhow!("expected owner/repo#number, got {pr:?}"))?;
+    let job = client.verify(&repo, number).await?;
+    Ok(format!(
+        "Verifying {repo}#{number} at {} (job {}): PRowl approves it if every finding was \
+         addressed. Follow it in prowl's Reviews tab.\n",
+        job.head_sha.chars().take(7).collect::<String>(),
+        job.id
+    ))
+}
+
 /// Approves, requests changes on, or dismisses `owner/repo#n` from the queue.
 pub async fn resolve(
     client: &ApiClient,

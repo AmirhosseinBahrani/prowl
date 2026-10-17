@@ -170,6 +170,27 @@ impl Reviews {
         Ok(())
     }
 
+    /// The most recent usable review of a pull request (any commit), other than `except_job`'s.
+    pub(crate) async fn latest_valid_for_pr(
+        &self,
+        repo: &str,
+        pr_number: u64,
+        except_job: i64,
+    ) -> anyhow::Result<Option<ReviewOutput>> {
+        let output: Option<String> = sqlx::query_scalar(
+            "SELECT r.output FROM reviews r JOIN jobs j ON j.id = r.job_id
+             WHERE j.repo = ? AND j.pr_number = ? AND r.valid AND r.job_id != ?
+             ORDER BY r.id DESC LIMIT 1",
+        )
+        .bind(repo)
+        .bind(pr_number as i64)
+        .bind(except_job)
+        .fetch_optional(&self.db)
+        .await?
+        .flatten();
+        Ok(output.as_deref().map(serde_json::from_str).transpose()?)
+    }
+
     pub(crate) async fn list(&self, job_id: Option<i64>) -> anyhow::Result<Vec<Review>> {
         let rows: Vec<ReviewRow> = sqlx::query_as(
             "SELECT r.id, r.job_id, r.policy_scope, r.policy_version_id, r.valid, r.output,

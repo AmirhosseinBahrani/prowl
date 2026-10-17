@@ -26,6 +26,9 @@ pub mod kind {
     pub const GATED_OUT: &str = "pr.gated_out";
 }
 
+/// Text in every thread PRowl opens for a finding (see `publish::finding_comment`).
+pub(crate) const PROWL_THREAD: &str = "PRowl automated review";
+
 /// Why a review the user asked for couldn't be queued.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ManualError {
@@ -176,6 +179,9 @@ impl Poller {
             // PRs waiting on the user may have been reviewed on GitHub or closed meanwhile.
             if let Err(e) = self.inner.queue.sync_with_github().await {
                 tracing::warn!(error = %e, "checking the human review queue failed");
+            }
+            if let Err(e) = self.verify_resolved().await {
+                tracing::warn!(error = %e, "checking resolved review threads failed");
             }
             let _ = self
                 .inner
@@ -432,6 +438,60 @@ impl Poller {
                     .unwrap_or_else(|| format!("{reason:?}")),
             ),
         })
+    }
+
+    /// For agent-only PRs (with agent verdicts on): once every thread PRowl opened for its
+    /// findings is resolved, queues a verification of the current commit — once per commit.
+    async fn verify_resolved(&self) -> anyhow::Result<()> {
+        if !self.inner.settings.get().agent_verdicts {
+            return Ok(());
+        }
+        let AuthState::Connected { login, .. } = self.inner.auth.state().await else {
+            return Ok(());
+        };
+        let Some(token) = self.inner.auth.token().await else {
+            return Ok(());
+        };
+        for (repo, number) in self.inner.jobs.agent_reviewed_prs().await? {
+            let threads = self
+                .inner
+                .github
+                .review_threads(&token, &repo, number)
+                .await?;
+            let mine: Vec<_> = threads
+                .iter()
+                .filter(|t| t.author.eq_ignore_ascii_case(&login) && t.body.contains(PROWL_THREAD))
+                .collect();
+            if mine.is_empty() || mine.iter().any(|t| !t.resolved) {
+                continue;
+            }
+            let pr = self
+                .inner
+                .github
+                .pull_request(&token, &repo, number)
+                .await?;
+            if pr.state != "open"
+                || self
+                    .inner
+                    .jobs
+                    .exists_of_kind(&repo, number, &pr.head.sha, crate::jobs::kinds::VERIFY)
+                    .await?
+            {
+                continue;
+            }
+            tracing::info!(
+                repo,
+                pr = number,
+                "all of PRowl's threads are resolved; verifying"
+            );
+            if let Err(e) = self
+                .enqueue_manual(&repo, number, crate::jobs::kinds::VERIFY)
+                .await
+            {
+                tracing::warn!(repo, pr = number, error = %e, "could not queue a verification");
+            }
+        }
+        Ok(())
     }
 
     /// Queues a job for `repo#number` at its current commit, whatever happened to it before:

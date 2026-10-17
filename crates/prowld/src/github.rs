@@ -244,6 +244,20 @@ const PER_PAGE: usize = 100;
 /// Below this many remaining API calls, background work pauses until the limit resets.
 const MIN_RATE_REMAINING: u64 = 50;
 
+/// A review thread on a pull request, as GitHub's GraphQL API reports it (the REST API doesn't
+/// say whether a thread is resolved).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewThread {
+    pub path: String,
+    pub line: Option<u32>,
+    pub resolved: bool,
+    /// The code it's on has changed since.
+    pub outdated: bool,
+    /// Who opened the thread, and what they wrote.
+    pub author: String,
+    pub body: String,
+}
+
 /// A published release.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Release {
@@ -711,6 +725,92 @@ impl GitHub {
         )
         .await
         .map(drop)
+    }
+
+    /// Every review thread on the pull request.
+    pub(crate) async fn review_threads(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<ReviewThread>, GitHubError> {
+        const QUERY: &str =
+            "query($owner: String!, $name: String!, $number: Int!, $after: String) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  isResolved isOutdated path line
+                  comments(first: 1) { nodes { author { login } body } }
+                }
+              }
+            }
+          }
+        }";
+        let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+        let mut threads = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let answer: serde_json::Value = self
+                .graphql(
+                    token,
+                    QUERY,
+                    serde_json::json!({
+                        "owner": owner, "name": name, "number": number, "after": after,
+                    }),
+                )
+                .await?;
+            let page = &answer["data"]["repository"]["pullRequest"]["reviewThreads"];
+            for node in page["nodes"].as_array().into_iter().flatten() {
+                let first = &node["comments"]["nodes"][0];
+                threads.push(ReviewThread {
+                    path: node["path"].as_str().unwrap_or_default().to_owned(),
+                    line: node["line"].as_u64().map(|l| l as u32),
+                    resolved: node["isResolved"].as_bool().unwrap_or(false),
+                    outdated: node["isOutdated"].as_bool().unwrap_or(false),
+                    author: first["author"]["login"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    body: first["body"].as_str().unwrap_or_default().to_owned(),
+                });
+            }
+            if page["pageInfo"]["hasNextPage"].as_bool() != Some(true) {
+                return Ok(threads);
+            }
+            after = page["pageInfo"]["endCursor"].as_str().map(str::to_owned);
+        }
+    }
+
+    /// Runs a GraphQL query. `https://api.github.com` answers at `/graphql`; GitHub Enterprise
+    /// (`…/api/v3`) at `…/api/graphql`.
+    async fn graphql(
+        &self,
+        token: &str,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value, GitHubError> {
+        let url = match self.api_url.strip_suffix("/api/v3") {
+            Some(host) => format!("{host}/api/graphql"),
+            None => format!("{}/graphql", self.api_url),
+        };
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "query": query, "variables": variables }))
+            .send()
+            .await?;
+        self.record_rate_limit(&response);
+        let answer: serde_json::Value = self.check(response).await?.json().await?;
+        if let Some(errors) = answer.get("errors").filter(|e| !e.is_null()) {
+            return Err(GitHubError::Status {
+                status: StatusCode::OK,
+                body: format!("GraphQL errors: {errors}"),
+            });
+        }
+        Ok(answer)
     }
 
     async fn send_json<T: serde::de::DeserializeOwned>(

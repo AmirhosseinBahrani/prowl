@@ -165,6 +165,23 @@ impl ApiClient {
     }
 
     /// Polls GitHub for review requests now and returns what happened.
+    /// Checks that `repo#pr`'s findings were addressed and approves it if so; returns the job.
+    pub async fn verify(&self, repo: &str, pr: u64) -> Result<Job, ClientError> {
+        let body = serde_json::json!({ "repo": repo, "pr": pr });
+        self.call_json_body(Method::POST, "/v1/verify", Some(body))
+            .await
+    }
+
+    /// The pull request's review threads and whether each is resolved.
+    pub async fn threads(
+        &self,
+        repo: &str,
+        pr: u64,
+    ) -> Result<Vec<crate::ReviewThread>, ClientError> {
+        self.get_json(&format!("/v1/threads?repo={repo}&pr={pr}"))
+            .await
+    }
+
     /// Reviews `repo#pr` again at its current commit; returns the queued job.
     pub async fn rerun(&self, repo: &str, pr: u64) -> Result<Job, ClientError> {
         let body = serde_json::json!({ "repo": repo, "pr": pr });
