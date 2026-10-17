@@ -18,6 +18,9 @@ All notable changes to PRowl are documented here. The format is based on
   finding, on the line it's about — instead of inside one long comment. The "⏳ Waiting for
   human approval" comment keeps the reasons and links to the threads; findings that aren't on a
   changed line stay in the comment.
+- A review in the Reviews tab now opens with its findings, each in its own box (severity,
+  file and line, title, explanation, suggestion), and shows Claude's conversation and context
+  below them. While a review runs, the findings appear as soon as Claude answers.
 
 ## [0.1.4] - 2026-10-17
 
