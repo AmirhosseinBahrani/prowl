@@ -1,12 +1,13 @@
 //! What a review's Claude run can reach: no secrets from the daemon's environment, and no
 //! symlinks out of the checkout. (Its own test binary: it sets a process environment variable.)
+//! Unix only: creating the PR's symlink needs it.
+#![cfg(unix)]
 
 mod common;
 
 use common::*;
 use prowl_e2e::ClaudeResponse;
 
-#[cfg(unix)]
 #[tokio::test]
 async fn claude_sees_no_daemon_secrets_and_no_symlinks_out_of_the_checkout() {
     // SAFETY: this test binary runs this one test; nothing else reads the environment.
