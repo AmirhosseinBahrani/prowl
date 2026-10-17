@@ -46,11 +46,13 @@ pub enum AuthState {
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
     #[error(
-        "no GitHub OAuth client id configured; set PROWL_GITHUB_CLIENT_ID to the PRowl OAuth App's client id"
+        "no GitHub OAuth client id configured; set PROWL_GITHUB_CLIENT_ID or write it to the github-client-id file in the PRowl home, or sign in with a personal access token"
     )]
     NoClientId,
     #[error("could not start GitHub login: {0}")]
     GitHub(String),
+    #[error("GitHub did not accept this token")]
+    InvalidToken,
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -204,6 +206,26 @@ impl Auth {
             }
         });
         Ok(pending)
+    }
+
+    /// Connects with a token the user created themselves (a personal access token), after
+    /// checking that GitHub accepts it. Cancels any device flow in progress.
+    pub(crate) async fn sign_in_with_token(&self, token: &str) -> Result<AuthState, AuthError> {
+        let token = token.trim();
+        if token.is_empty() || token.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            return Err(AuthError::InvalidToken);
+        }
+        if let Some(flow) = self.inner.flow.lock().await.take() {
+            flow.cancel();
+        }
+        let user = match self.inner.github.current_user(token).await {
+            Ok(user) => user,
+            Err(GitHubError::Unauthorized) => return Err(AuthError::InvalidToken),
+            Err(e) => return Err(AuthError::GitHub(e.to_string())),
+        };
+        self.inner.credentials.set(token.to_owned()).await?;
+        self.save_account(&user.login, user.name.as_deref()).await?;
+        Ok(self.state().await)
     }
 
     async fn poll_until_resolved(

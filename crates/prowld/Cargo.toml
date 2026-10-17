@@ -1,10 +1,17 @@
 [package]
 name = "prowld"
-description = "PRowl background daemon"
+description = "Background daemon for PRowl: reviews the GitHub pull requests you are asked to review with your local Claude Code CLI, around the clock"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["github", "code-review", "claude", "pull-requests", "daemon"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow.workspace = true
@@ -23,6 +30,7 @@ keyring.workspace = true
 notify-rust.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

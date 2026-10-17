@@ -91,6 +91,8 @@ pub enum Msg {
     Connected(Result<Status, String>),
     Doctor(Result<Doctor, String>),
     Auth(Result<AuthState, String>),
+    /// The answer to starting a device flow or signing in with a token.
+    SignIn(Result<AuthState, String>),
     WatchedCount(Result<usize, String>),
     /// The answer to the `LoadRepos` request with this id.
     Repos(u64, Result<RepoPage, String>),
@@ -130,6 +132,9 @@ pub enum Cmd {
     LoadAuth,
     LoadWatchedCount,
     StartLogin,
+    SignInWithToken {
+        token: String,
+    },
     LoadRepos {
         request: u64,
         query: String,
@@ -198,6 +203,10 @@ pub struct App {
     pub daemon_error: Option<String>,
     pub doctor: Option<Doctor>,
     pub auth: Option<AuthState>,
+    /// The personal access token being typed on the login screen.
+    pub token_input: Option<String>,
+    /// Why the last sign-in attempt was refused.
+    pub login_error: Option<String>,
     pub repos: RepoPicker,
     pub policy: PolicyTab,
     pub feed: FeedTab,
@@ -222,6 +231,8 @@ impl App {
             daemon_error: None,
             doctor: None,
             auth: None,
+            token_input: None,
+            login_error: None,
             repos: RepoPicker::default(),
             policy: PolicyTab::default(),
             feed: FeedTab::default(),
@@ -279,6 +290,15 @@ impl App {
                 }
             }
             Msg::Auth(Err(e)) => self.lost(e),
+            Msg::SignIn(Ok(auth)) => {
+                self.token_input = None;
+                self.login_error = None;
+                self.update(Msg::Auth(Ok(auth)))
+            }
+            Msg::SignIn(Err(e)) => {
+                self.login_error = Some(e);
+                vec![]
+            }
             Msg::WatchedCount(Ok(n)) => {
                 self.status.watched = Some(n);
                 if matches!(self.screen, Screen::Main | Screen::Repos) {
@@ -493,6 +513,9 @@ impl App {
         if self.repos.searching && self.picker_visible() {
             return self.on_search_key(key);
         }
+        if self.screen == Screen::Login && self.token_input.is_some() {
+            return self.on_token_key(key);
+        }
         if self.screen == Screen::Main {
             match self.tab {
                 Tab::Policy if self.policy.captures_keys() => return self.policy.on_key(key),
@@ -538,7 +561,15 @@ impl App {
                 _ => vec![],
             },
             Screen::Login => match key.code {
-                KeyCode::Enter => vec![Cmd::StartLogin],
+                KeyCode::Enter => {
+                    self.login_error = None;
+                    vec![Cmd::StartLogin]
+                }
+                KeyCode::Char('t') => {
+                    self.login_error = None;
+                    self.token_input = Some(String::new());
+                    vec![]
+                }
                 KeyCode::Char('o') => match &self.auth {
                     Some(AuthState::Pending {
                         verification_uri, ..
@@ -575,6 +606,30 @@ impl App {
             },
             Screen::Main => self.on_main_key(key),
         }
+    }
+
+    fn on_token_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
+        let Some(token) = &mut self.token_input else {
+            return vec![];
+        };
+        match key.code {
+            KeyCode::Esc => {
+                self.token_input = None;
+                self.login_error = None;
+            }
+            KeyCode::Backspace => {
+                token.pop();
+            }
+            KeyCode::Enter if !token.trim().is_empty() => {
+                self.login_error = None;
+                return vec![Cmd::SignInWithToken {
+                    token: token.trim().to_owned(),
+                }];
+            }
+            KeyCode::Char(c) if !c.is_whitespace() && !c.is_control() => token.push(c),
+            _ => {}
+        }
+        vec![]
     }
 
     fn on_main_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
@@ -716,6 +771,57 @@ mod tests {
 
     fn key(code: KeyCode) -> Msg {
         Msg::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    #[test]
+    fn a_personal_access_token_can_be_typed_on_the_login_screen() {
+        let mut app = App::new("test");
+        app.update(Msg::Auth(Ok(AuthState::Disconnected)));
+        assert_eq!(app.screen, Screen::Login);
+
+        app.update(key(KeyCode::Char('t')));
+        for c in "ghp_q?x".chars() {
+            app.update(key(KeyCode::Char(c)));
+        }
+        app.update(key(KeyCode::Backspace));
+        assert!(!app.quit, "q is part of the token, not quit");
+        assert!(!app.help);
+        assert_eq!(
+            app.update(key(KeyCode::Enter)),
+            [Cmd::SignInWithToken {
+                token: "ghp_q?".into()
+            }]
+        );
+
+        app.update(Msg::SignIn(Err(
+            "422: GitHub did not accept this token".into()
+        )));
+        assert_eq!(app.screen, Screen::Login, "a refused token keeps you here");
+        assert!(
+            app.login_error
+                .as_deref()
+                .unwrap()
+                .contains("did not accept")
+        );
+        assert!(app.token_input.is_some());
+
+        let cmds = app.update(Msg::SignIn(Ok(AuthState::Connected {
+            login: "octo".into(),
+            name: None,
+        })));
+        assert_eq!(cmds, [Cmd::LoadWatchedCount]);
+        assert!(app.token_input.is_none());
+    }
+
+    #[test]
+    fn escape_leaves_token_entry() {
+        let mut app = App::new("test");
+        app.update(Msg::Auth(Ok(AuthState::Disconnected)));
+        app.update(key(KeyCode::Char('t')));
+        app.update(key(KeyCode::Char('x')));
+        app.update(key(KeyCode::Esc));
+        assert!(app.token_input.is_none());
+        assert_eq!(app.update(key(KeyCode::Enter)), [Cmd::StartLogin]);
     }
 
     fn repo(id: i64, name: &str, watched: bool, archived: bool) -> Repo {

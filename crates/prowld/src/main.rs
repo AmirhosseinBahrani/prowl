@@ -23,7 +23,11 @@ enum Command {
     /// Ask a running daemon for its status.
     Status,
     /// Connect a GitHub account through the running daemon (device flow).
-    Login,
+    Login {
+        /// Sign in with a personal access token read from stdin instead.
+        #[arg(long)]
+        token: bool,
+    },
     /// Disconnect the GitHub account and delete its stored token.
     Logout,
     /// Manage the per-user background service that keeps prowld running.
@@ -66,7 +70,8 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&status)?);
             Ok(())
         }
-        Command::Login => login(&ApiClient::for_home(&home)?).await,
+        Command::Login { token: false } => login(&ApiClient::for_home(&home)?).await,
+        Command::Login { token: true } => login_with_token(&ApiClient::for_home(&home)?).await,
         Command::Service { action, name } => {
             use prowld::service::{self, ServiceSpec};
             let spec = ServiceSpec::beside_current_exe(&name, &home)?;
@@ -96,6 +101,24 @@ async fn run(config: Config) -> anyhow::Result<()> {
         }
     });
     daemon.wait().await.context("prowld stopped with an error")
+}
+
+async fn login_with_token(client: &ApiClient) -> anyhow::Result<()> {
+    use std::io::IsTerminal;
+    let token = if std::io::stdin().is_terminal() {
+        rpassword::prompt_password("GitHub personal access token: ")?
+    } else {
+        let mut token = String::new();
+        std::io::stdin().read_line(&mut token)?;
+        token
+    };
+    match client.sign_in_with_token(token.trim()).await? {
+        AuthState::Connected { login, .. } => {
+            println!("Connected as {login}.");
+            Ok(())
+        }
+        other => anyhow::bail!("GitHub sign-in ended unexpectedly: {other:?}"),
+    }
 }
 
 async fn login(client: &ApiClient) -> anyhow::Result<()> {

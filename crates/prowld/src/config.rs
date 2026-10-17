@@ -5,6 +5,8 @@ use anyhow::{Context, anyhow};
 
 pub const TOKEN_FILE: &str = "api-token";
 pub const DB_FILE: &str = "prowl.db";
+/// Optional file holding the OAuth App client id, for services that don't see the shell's env.
+pub const CLIENT_ID_FILE: &str = "github-client-id";
 
 /// Where the GitHub token is kept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,14 +76,12 @@ pub struct Config {
 
 impl Config {
     pub fn new(home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
         Self {
-            home: home.into(),
+            github_client_id: client_id(&home),
+            home,
             github_api_url: "https://api.github.com".into(),
             github_web_url: "https://github.com".into(),
-            github_client_id: std::env::var("PROWL_GITHUB_CLIENT_ID")
-                .ok()
-                .or_else(|| option_env!("PROWL_GITHUB_CLIENT_ID").map(str::to_owned))
-                .filter(|id| !id.is_empty()),
             credentials: CredentialBackend::Auto,
             policy_sync_interval: Duration::from_secs(2),
             poll_interval: Duration::from_secs(60),
@@ -116,6 +116,25 @@ impl Config {
     pub fn token_path(&self) -> PathBuf {
         self.home.join(TOKEN_FILE)
     }
+}
+
+/// The OAuth App client id: `PROWL_GITHUB_CLIENT_ID`, else the `github-client-id` file in the
+/// home, else the one built into this binary.
+fn client_id(home: &Path) -> Option<String> {
+    let from_file = || {
+        std::fs::read_to_string(home.join(CLIENT_ID_FILE))
+            .ok()
+            .map(|s| s.trim().to_owned())
+    };
+    [
+        std::env::var("PROWL_GITHUB_CLIENT_ID").ok(),
+        from_file(),
+        option_env!("PROWL_GITHUB_CLIENT_ID").map(str::to_owned),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|id| id.trim().to_owned())
+    .find(|id| !id.is_empty())
 }
 
 /// OS-appropriate data directory, e.g. `~/Library/Application Support/dev.prowl.prowl`.
@@ -160,6 +179,19 @@ mod tests {
         assert_eq!(first.len(), 64);
         assert_eq!(first, second);
         assert_eq!(read_token(dir.path()).unwrap(), first);
+    }
+
+    #[test]
+    fn client_id_is_read_from_the_home_when_not_in_the_environment() {
+        if std::env::var_os("PROWL_GITHUB_CLIENT_ID").is_some() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(CLIENT_ID_FILE), "  Ov23liExample\n").unwrap();
+        assert_eq!(
+            Config::new(dir.path()).github_client_id.as_deref(),
+            Some("Ov23liExample")
+        );
     }
 
     #[cfg(unix)]

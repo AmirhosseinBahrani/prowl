@@ -208,3 +208,83 @@ async fn token_file_fallback_is_private() {
     assert_eq!(mode & 0o777, 0o600);
     h.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn personal_access_token_connects_without_an_oauth_app() {
+    let mut h = Harness::start().await.unwrap();
+    h.restart_with(|c| c.github_client_id = None).await.unwrap();
+    h.github.route(
+        Method::GET,
+        "/user",
+        StatusCode::OK,
+        json!({ "login": "octo", "name": "Octo Cat" }),
+    );
+
+    let state = h
+        .client()
+        .sign_in_with_token("  ghp_personal\n")
+        .await
+        .unwrap();
+
+    assert!(matches!(&state, AuthState::Connected { login, .. } if login == "octo"));
+    let checked = h.github.requests_to(Method::GET, "/user");
+    assert!(
+        checked.iter().any(|r| r
+            .headers
+            .get("authorization")
+            .is_some_and(|a| a.ends_with(" ghp_personal"))),
+        "the token was checked with GitHub"
+    );
+    let stored = std::fs::read_to_string(h.daemon().home().join("github-token")).unwrap();
+    assert_eq!(stored.trim(), "ghp_personal");
+    h.restart_with(|c| c.github_client_id = None).await.unwrap();
+    assert!(matches!(
+        h.client().auth_state().await.unwrap(),
+        AuthState::Connected { login, .. } if login == "octo"
+    ));
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn rejected_token_is_not_stored() {
+    let h = Harness::start().await.unwrap();
+    h.github.route(
+        Method::GET,
+        "/user",
+        StatusCode::UNAUTHORIZED,
+        json!({ "message": "Bad credentials" }),
+    );
+
+    let err = h
+        .client()
+        .sign_in_with_token("ghp_wrong")
+        .await
+        .unwrap_err();
+
+    let message = err.to_string();
+    assert!(message.contains("422"), "{message}");
+    assert!(message.contains("did not accept"), "{message}");
+    assert_eq!(
+        h.client().auth_state().await.unwrap(),
+        AuthState::Disconnected
+    );
+    assert!(!h.daemon().home().join("github-token").exists());
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn token_sign_in_replaces_a_login_in_progress() {
+    let h = Harness::start().await.unwrap();
+    script_device_flow(&h, vec![json!({ "error": "authorization_pending" }); 1000]);
+    h.client().start_login().await.unwrap();
+
+    let state = h.client().sign_in_with_token("ghp_personal").await.unwrap();
+
+    assert!(matches!(state, AuthState::Connected { .. }));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(matches!(
+        h.client().auth_state().await.unwrap(),
+        AuthState::Connected { .. }
+    ));
+    h.shutdown().await.unwrap();
+}

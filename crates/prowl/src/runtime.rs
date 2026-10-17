@@ -144,7 +144,10 @@ fn execute(
             Cmd::Connect => Msg::Connected(client.status().await.map_err(err)),
             Cmd::LoadDoctor => Msg::Doctor(client.doctor().await.map_err(err)),
             Cmd::LoadAuth => Msg::Auth(client.auth_state().await.map_err(err)),
-            Cmd::StartLogin => Msg::Auth(client.start_login().await.map_err(err)),
+            Cmd::StartLogin => Msg::SignIn(client.start_login().await.map_err(err)),
+            Cmd::SignInWithToken { token } => {
+                Msg::SignIn(client.sign_in_with_token(&token).await.map_err(err))
+            }
             Cmd::LoadWatchedCount => {
                 Msg::WatchedCount(client.watched_repos().await.map(|r| r.len()).map_err(err))
             }
