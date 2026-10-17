@@ -51,15 +51,23 @@ async fn a_newer_release_is_reported_and_announced_once() {
         update.url,
         "https://github.com/acme/prowl/releases/tag/v99.0.0"
     );
-    let announced = h
-        .client()
-        .recent_events(500)
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|e| e.kind == "update.available")
-        .count();
-    assert_eq!(announced, 1);
+    // The event follows the status update closely; give it a moment, then make sure it's alone.
+    let announced = || async {
+        h.client()
+            .recent_events(500)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "update.available")
+            .count()
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while announced().await == 0 {
+        assert!(tokio::time::Instant::now() < deadline, "never announced");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(announced().await, 1);
     h.shutdown().await.unwrap();
 }
 
