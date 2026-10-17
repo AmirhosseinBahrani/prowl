@@ -90,6 +90,11 @@ pub const FIELDS: &[Field] = &[
         kind: Kind::Bool,
     },
     Field {
+        key: "agent_verdicts",
+        label: "Agent approves / requests changes on low-risk PRs",
+        kind: Kind::Bool,
+    },
+    Field {
         key: "notifications",
         label: "Desktop notifications",
         kind: Kind::Bool,

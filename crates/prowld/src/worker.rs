@@ -659,6 +659,7 @@ impl Worker {
             reviewer,
             policy_scope,
             policy_version_id,
+            agent_verdicts: inner.settings.get().agent_verdicts,
         };
         let mut prior = inner.publications.prior(&job.repo, job.pr_number).await?;
         let submitted = publish::publish_result(

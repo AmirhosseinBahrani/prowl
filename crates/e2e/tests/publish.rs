@@ -82,25 +82,18 @@ async fn an_agent_only_review_is_posted_as_a_comment_review() {
     );
     assert!(text.contains("`README.md:40`"));
 
-    let created = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/labels"));
-    assert_eq!(
-        created[0].body.as_ref().unwrap()["name"],
-        "prowl:agent-reviewed"
-    );
-    let labelled = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/labels"));
-    assert_eq!(
-        labelled[0].body.as_ref().unwrap()["labels"],
-        json!(["prowl:agent-reviewed"])
+    assert_eq!(body["event"], "COMMENT");
+    assert!(
+        h.github
+            .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/labels"))
+            .is_empty(),
+        "agent-only reviews add no label"
     );
     h.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn prowl_never_approves() {
+async fn without_agent_verdicts_prowl_never_approves() {
     let (h, _) = setup(&[7]).await;
     let mut eager = calm_review_with_findings();
     eager["recommendation"] = "approve".into();
@@ -114,6 +107,78 @@ async fn prowl_never_approves() {
             .and_then(|b| b.get("event"))
             .and_then(|e| e.as_str());
         assert_ne!(event, Some("APPROVE"), "{} {}", write.method, write.path);
+    }
+    h.shutdown().await.unwrap();
+}
+
+fn posted_review(h: &Harness) -> Value {
+    h.github
+        .requests_to(Method::POST, &format!("/repos/{REPO}/pulls/7/reviews"))
+        .remove(0)
+        .body
+        .unwrap()
+}
+
+#[tokio::test]
+async fn with_agent_verdicts_a_low_risk_pr_is_approved() {
+    let (mut h, _) = setup(&[7]).await;
+    h.restart_with(|c| c.agent_verdicts = true).await.unwrap();
+    let mut eager = calm_review_with_findings();
+    eager["recommendation"] = "approve".into();
+
+    let review = reviewed(&h, &eager).await;
+
+    assert_eq!(review.decision, Some(Decision::AgentOnly));
+    let posted = posted_review(&h);
+    assert_eq!(posted["event"], "APPROVE");
+    assert!(
+        posted["body"]
+            .as_str()
+            .unwrap()
+            .contains("approved by the agent")
+    );
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn with_agent_verdicts_changes_are_requested_when_claude_recommends_it() {
+    let (mut h, _) = setup(&[7]).await;
+    h.restart_with(|c| c.agent_verdicts = true).await.unwrap();
+    let mut picky = calm_review_with_findings();
+    picky["recommendation"] = "request_changes".into();
+
+    reviewed(&h, &picky).await;
+
+    let posted = posted_review(&h);
+    assert_eq!(posted["event"], "REQUEST_CHANGES");
+    assert!(
+        posted["body"]
+            .as_str()
+            .unwrap()
+            .contains("changes requested by the agent")
+    );
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn agent_verdicts_never_approve_a_pr_that_needs_a_human() {
+    let (mut h, _) = setup(&[7]).await;
+    h.restart_with(|c| c.agent_verdicts = true).await.unwrap();
+    let mut risky = valid_review();
+    risky["recommendation"] = "approve".into();
+
+    let review = reviewed(&h, &risky).await;
+
+    assert_eq!(review.decision, Some(Decision::NeedsHuman));
+    for write in h.github.writes() {
+        let event = write.body.as_ref().and_then(|b| b.get("event"));
+        assert_ne!(
+            event.and_then(|e| e.as_str()),
+            Some("APPROVE"),
+            "{} {}",
+            write.method,
+            write.path
+        );
     }
     h.shutdown().await.unwrap();
 }

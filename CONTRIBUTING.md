@@ -41,7 +41,8 @@ merged:
   configure it.
 - PRowl never runs code from a pull request.
 - Signals can only escalate a PR to a human, never downgrade it.
-- The agent never approves a pull request.
+- The agent never approves a pull request unless the user turned on agent verdicts, and never one
+  that any signal sends to a human.
 
 ## License
 

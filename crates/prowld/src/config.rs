@@ -61,6 +61,9 @@ pub struct Config {
     pub max_changed_files: u64,
     /// Send desktop notifications (PR needs you, review failed, …).
     pub notifications: bool,
+    /// For PRs that don't need a human, post Claude's recommendation as the review's verdict
+    /// (approve or request changes) instead of a plain comment.
+    pub agent_verdicts: bool,
     /// Replaces the OS notification service (tests).
     pub notifier: Option<crate::notify::NotifierHook>,
     /// When to keep the machine awake; `None` picks `ac_only` with a battery, else `always`.
@@ -105,6 +108,7 @@ impl Config {
             max_changed_lines: 3000,
             max_changed_files: 100,
             notifications: true,
+            agent_verdicts: false,
             notifier: None,
             sleep_mode: None,
             power: None,

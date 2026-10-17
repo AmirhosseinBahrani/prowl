@@ -173,7 +173,7 @@ pub(crate) struct PrFile {
     pub patch: Option<String>,
 }
 
-/// A review to submit. `event` is always `COMMENT`: PRowl never approves on its own.
+/// A review to submit: `COMMENT`, or `APPROVE` / `REQUEST_CHANGES` when agent verdicts are on.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct NewReview<'a> {
     pub commit_id: &'a str,
@@ -459,7 +459,6 @@ impl GitHub {
         number: u64,
         review: &NewReview<'_>,
     ) -> Result<Submitted, GitHubError> {
-        debug_assert_eq!(review.event, "COMMENT");
         self.send_json(
             token,
             reqwest::Method::POST,
@@ -467,6 +466,26 @@ impl GitHub {
             review,
         )
         .await
+    }
+
+    /// Withdraws an approval or change request (needs write access to the repository).
+    pub(crate) async fn dismiss_review(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        review_id: i64,
+        message: &str,
+    ) -> Result<(), GitHubError> {
+        let _: serde_json::Value = self
+            .send_json(
+                token,
+                reqwest::Method::PUT,
+                &format!("/repos/{repo}/pulls/{number}/reviews/{review_id}/dismissals"),
+                &serde_json::json!({ "message": message, "event": "DISMISS" }),
+            )
+            .await?;
+        Ok(())
     }
 
     /// A comment on the PR's conversation (not a review, so review requests stay pending).
