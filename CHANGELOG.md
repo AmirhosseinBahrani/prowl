@@ -15,9 +15,6 @@ All notable changes to PRowl are documented here. The format is based on
   `v` in the Queue or Reviews tab, or run `prowl verify owner/repo#N`, and an approval also
   takes the PR out of the queue. `GET /v1/threads` lists a PR's threads and whether each is
   resolved.
-
-### Added
-
 - **Review again**: `R` in the Queue, Reviews and History tabs (or `prowl rerun owner/repo#N`)
   reviews a pull request again at its current commit and posts a fresh review — even after
   PRowl reviewed it, when GitHub no longer lists you as a requested reviewer.
