@@ -588,6 +588,14 @@ async fn the_reviews_tab_shows_the_conversation_and_what_was_posted() {
     // The outcome comes from the reviews, which load alongside the jobs.
     tui.wait_for("agent").await;
     tui.press(KeyCode::Enter);
+    tui.wait_for("── Findings (0) ──").await;
+    assert!(tui.screen().contains("No findings."));
+    tui.wait_for("── Conversation & context ──").await;
+    let screen = tui.screen();
+    assert!(
+        screen.find("Findings (0)") < screen.find("Conversation & context"),
+        "findings come first:\n{screen}"
+    );
     tui.wait_for("── Context given to Claude ──").await;
     tui.wait_for("│ <role>").await;
     assert!(

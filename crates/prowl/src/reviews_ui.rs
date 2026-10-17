@@ -78,6 +78,25 @@ pub fn draw(tab: &ReviewsTab, frame: &mut Frame, area: Rect) {
 fn draw_open(tab: &ReviewsTab, open: &OpenReview, frame: &mut Frame, area: Rect) {
     let mut lines = header_lines(tab, open.job_id);
     lines.push(Line::from(""));
+    // The findings first, each in its own box; the conversation below.
+    match current_findings(tab, open) {
+        Some(findings) => {
+            lines.push(section(&format!("Findings ({})", findings.len())));
+            if findings.is_empty() {
+                lines.push(Line::from("  No findings.").dim());
+            }
+            for finding in &findings {
+                lines.extend(finding_box(finding, area.width));
+            }
+        }
+        None if open.loaded => {
+            lines.push(section("Findings"));
+            lines.push(Line::from("  None yet — they appear when Claude answers.").dim());
+        }
+        None => {}
+    }
+    lines.push(Line::from(""));
+    lines.push(section("Conversation & context"));
     if !open.loaded {
         lines.push(Line::from("  Loading…").dim());
     } else if open.transcript.is_empty() {
@@ -110,6 +129,106 @@ fn draw_open(tab: &ReviewsTab, open: &OpenReview, frame: &mut Frame, area: Rect)
         paragraph.scroll((scroll.min(u16::MAX as usize) as u16, 0)),
         area,
     );
+}
+
+/// The findings to show: the stored review's, or while it runs, Claude's latest valid answer.
+fn current_findings(tab: &ReviewsTab, open: &OpenReview) -> Option<Vec<prowld::review::Finding>> {
+    if let Some(output) = tab.review_of(open.job_id).and_then(|r| r.output.as_ref()) {
+        return Some(output.findings.clone());
+    }
+    open.transcript
+        .iter()
+        .rev()
+        .filter(|e| e.kind == "result" && e.content["valid"] == Value::Bool(true))
+        .find_map(|e| serde_json::from_value(e.content["output"]["findings"].clone()).ok())
+}
+
+/// One finding drawn as a box `width` columns wide: severity and place on the top edge, then
+/// the title, the explanation and the suggestion, wrapped to fit.
+pub fn finding_box(finding: &prowld::review::Finding, width: u16) -> Vec<Line<'static>> {
+    let severity = format!("{:?}", finding.severity).to_lowercase();
+    let color = match severity.as_str() {
+        "critical" => theme::BAD,
+        other => theme::severity(other).fg.unwrap_or(theme::ACCENT),
+    };
+    let edge = Style::default().fg(color);
+    let inner = (width as usize).saturating_sub(6).max(10);
+    let place = match finding.line {
+        Some(line) => format!("{}:{line}", finding.file),
+        None => finding.file.clone(),
+    };
+    let label = format!(" {} · {place} ", severity.to_uppercase());
+    let label_width = Span::raw(label.as_str()).width();
+    let mut lines = vec![Line::from(vec![
+        Span::styled(" ┌─", edge),
+        Span::styled(label, edge.add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("{}┐", "─".repeat((inner + 1).saturating_sub(label_width))),
+            edge,
+        ),
+    ])];
+    let mut row = |text: String, style: Style| {
+        let pad = inner.saturating_sub(Span::raw(text.as_str()).width());
+        lines.push(Line::from(vec![
+            Span::styled(" │ ", edge),
+            Span::styled(text, style),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(" │", edge),
+        ]));
+    };
+    for text in wrap(finding.title.trim(), inner) {
+        row(text, Style::default().add_modifier(Modifier::BOLD));
+    }
+    for paragraph in finding.body.trim().lines() {
+        for text in wrap(paragraph, inner) {
+            row(text, Style::default());
+        }
+    }
+    if let Some(suggestion) = finding
+        .suggestion
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        for text in wrap(&format!("Suggestion: {}", suggestion.trim()), inner) {
+            row(text, Style::default().fg(theme::GOOD));
+        }
+    }
+    lines.push(Line::from(Span::styled(
+        format!(" └{}┘", "─".repeat(inner + 2)),
+        edge,
+    )));
+    lines
+}
+
+/// Word-wraps `text` to `width` columns, breaking words longer than a line.
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word.to_owned();
+        while Span::raw(word.as_str()).width() > width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+            }
+            let cut: String = word.chars().take(width).collect();
+            word = word.chars().skip(width).collect();
+            lines.push(cut);
+        }
+        let needed = Span::raw(current.as_str()).width()
+            + usize::from(!current.is_empty())
+            + Span::raw(word.as_str()).width();
+        if needed > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(&word);
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 /// The PR, the job's state and, once decided, the outcome.
@@ -497,6 +616,29 @@ mod tests {
             !text.contains("↳ 7"),
             "only the first lines of a tool result"
         );
+    }
+
+    #[test]
+    fn each_finding_is_a_closed_box_of_even_width() {
+        let finding: prowld::review::Finding = serde_json::from_value(json!({
+            "file": "src/login.rs", "line": 12, "severity": "high",
+            "title": "Token logged",
+            "body": "The session token is written to the debug log on every request, which \
+                     anyone with log access can read. averyveryveryveryveryveryverylongidentifier",
+            "suggestion": "Redact it before logging."
+        }))
+        .unwrap();
+
+        let lines = finding_box(&finding, 50);
+
+        let widths: Vec<usize> = lines.iter().map(Line::width).collect();
+        assert!(widths.iter().all(|w| *w == widths[0]), "{widths:?}");
+        let text = plain(&lines);
+        assert!(text.starts_with(" ┌─ HIGH · src/login.rs:12 ─"), "{text}");
+        assert!(text.contains("│ Token logged"));
+        assert!(text.contains("Suggestion: Redact it before logging."));
+        assert!(text.lines().last().unwrap().starts_with(" └"));
+        assert!(text.lines().count() > 5, "the explanation wraps:\n{text}");
     }
 
     #[test]
