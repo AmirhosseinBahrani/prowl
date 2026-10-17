@@ -1,10 +1,17 @@
 [package]
 name = "prowl"
-description = "PRowl terminal UI"
+description = "Terminal UI and command line for PRowl, the around-the-clock pull-request reviewer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["github", "code-review", "claude", "tui", "pull-requests"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow.workspace = true

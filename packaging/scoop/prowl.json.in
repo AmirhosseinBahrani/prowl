@@ -2,7 +2,7 @@
     "version": "{{VERSION}}",
     "description": "Reviews GitHub pull requests around the clock with your local claude CLI",
     "homepage": "https://github.com/AmirhosseinBahrani/prowl",
-    "license": "Proprietary",
+    "license": "MIT|Apache-2.0",
     "depends": "git",
     "architecture": {
         "64bit": {
