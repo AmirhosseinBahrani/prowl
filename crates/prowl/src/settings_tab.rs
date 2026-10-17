@@ -318,8 +318,8 @@ mod tests {
         let settings: Settings = serde_json::from_value(json!({
             "poll_interval_secs": 60, "review_concurrency": 2, "claude_model": null,
             "review_timeout_secs": 900, "review_budget_usd": null, "daily_budget_usd": null,
-            "budget_day": "utc", "risk_threshold": 60, "max_changed_lines": 3000,
-            "max_changed_files": 100, "sleep_mode": null, "skip_drafts": true,
+            "budget_day": "utc", "risk_threshold": 60, "max_changed_lines": 70000,
+            "max_changed_files": 350, "sleep_mode": null, "skip_drafts": true,
             "include_team_requests": false, "notifications": true,
             "file_rules": { "acme/api": ["migrations/**"] }
         }))
