@@ -26,3 +26,5 @@ First public version.
   after sleep, daily budget, size limits and desktop notifications.
 - Per-user background service for macOS (launchd), Linux (systemd) and Windows (Task Scheduler).
 - Release builds for macOS, Linux and Windows with Homebrew, Scoop, `.deb` and `.rpm` packages.
+- One-line installers (`install.sh`, `install.ps1`) that verify checksums, install into your home
+  directory with versioned upgrades, and start the background service.

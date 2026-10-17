@@ -89,6 +89,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
     let auth = Auth::load(
         github.clone(),
         config.github_client_id.clone(),
+        config.github_client_id_file.clone(),
         credentials,
         db.clone(),
         events.clone(),

@@ -28,6 +28,7 @@ reviews and comments under your account. There are two ways to give it access.
    ```sh
    echo Ov23li... > "<prowl home>/github-client-id"
    ```
+   PRowl reads the file each time you start a login, so no restart is needed.
    Alternatively set `PROWL_GITHUB_CLIENT_ID` in the daemon's environment. Release builds may
    have the project's client id built in; the environment variable and the file both override it.
 6. Run `prowl`, choose **Connect GitHub**, and enter the code shown (press `o` to open the page,

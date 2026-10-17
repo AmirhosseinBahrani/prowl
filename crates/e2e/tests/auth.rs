@@ -288,3 +288,26 @@ async fn token_sign_in_replaces_a_login_in_progress() {
     ));
     h.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_client_id_saved_after_startup_is_used_at_the_next_login() {
+    let mut h = Harness::start().await.unwrap();
+    h.restart_with(|c| c.github_client_id = None).await.unwrap();
+    assert!(h.client().start_login().await.is_err());
+    std::fs::write(
+        h.daemon().home().join(prowld::config::CLIENT_ID_FILE),
+        "Ov23liSaved\n",
+    )
+    .unwrap();
+    script_device_flow(&h, vec![json!({ "error": "authorization_pending" })]);
+
+    let state = h.client().start_login().await.unwrap();
+
+    assert!(matches!(state, AuthState::Pending { .. }));
+    let sent = h.github.requests_to(Method::POST, "/login/device/code");
+    assert_eq!(
+        sent[0].form_field("client_id").as_deref(),
+        Some("Ov23liSaved")
+    );
+    h.shutdown().await.unwrap();
+}
