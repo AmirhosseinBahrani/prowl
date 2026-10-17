@@ -6,6 +6,12 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- Upgrading on macOS no longer fails with `"launchctl" failed: Bootstrap failed: 5: Input/output
+  error` (leaving PRowl stopped): reinstalling the background service now waits for launchd to
+  finish unloading the old one, and retries briefly.
+
 ## [0.1.5] - 2026-10-17
 
 ### Added

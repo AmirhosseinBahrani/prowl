@@ -243,6 +243,35 @@ fn systemd_quote(s: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// Calls `done` until it says yes or `limit` passes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn wait_until(limit: std::time::Duration, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + limit;
+    while !done() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Tries `f` up to `times` times, waiting `delay` (growing each time) between tries.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn retry<T>(
+    times: u32,
+    delay: std::time::Duration,
+    mut f: impl FnMut() -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let mut attempt = 1;
+    loop {
+        match f() {
+            Ok(value) => return Ok(value),
+            Err(e) if attempt >= times => return Err(e),
+            Err(_) => {
+                std::thread::sleep(delay * attempt);
+                attempt += 1;
+            }
+        }
+    }
+}
+
 /// Runs a command, failing with its stderr if it exits non-zero.
 fn run(cmd: &mut Command) -> anyhow::Result<String> {
     let output = cmd
@@ -279,17 +308,22 @@ mod imp {
     pub fn install(spec: &ServiceSpec) -> anyhow::Result<()> {
         let path = plist_path(spec)?;
         std::fs::create_dir_all(path.parent().expect("has parent"))?;
-        // Replace any previous definition so the new one takes effect.
-        let _ = run(Command::new("launchctl").arg("bootout").arg(format!(
-            "{}/{}",
-            domain()?,
-            spec.label()
-        )));
+        let domain = domain()?;
+        let target = format!("{domain}/{}", spec.label());
+        // Replace any previous definition so the new one takes effect. launchd unloads it in
+        // the background; registering again before it's gone fails with "Bootstrap failed: 5:
+        // Input/output error", so wait for it to disappear, then retry briefly if needed.
+        let _ = run(Command::new("launchctl").arg("bootout").arg(&target));
+        wait_until(std::time::Duration::from_secs(10), || {
+            run(Command::new("launchctl").arg("print").arg(&target)).is_err()
+        });
         std::fs::write(&path, launchd_plist(spec))?;
-        run(Command::new("launchctl")
-            .arg("bootstrap")
-            .arg(domain()?)
-            .arg(&path))?;
+        retry(5, std::time::Duration::from_millis(500), || {
+            run(Command::new("launchctl")
+                .arg("bootstrap")
+                .arg(&domain)
+                .arg(&path))
+        })?;
         Ok(())
     }
 
@@ -445,6 +479,28 @@ mod tests {
             home: PathBuf::from("/Users/a&b/Library/Application Support/dev.prowl.prowl"),
             path: Some("/opt/homebrew/bin:/Users/a&b/.local/bin:/usr/bin:/bin".into()),
         }
+    }
+
+    #[test]
+    fn retry_gives_up_only_after_the_last_try() {
+        let mut calls = 0;
+        let ok = retry(5, std::time::Duration::ZERO, || {
+            calls += 1;
+            if calls < 3 {
+                anyhow::bail!("Bootstrap failed: 5")
+            } else {
+                Ok(calls)
+            }
+        });
+        assert_eq!(ok.unwrap(), 3);
+
+        let mut calls = 0;
+        let err = retry(2, std::time::Duration::ZERO, || -> anyhow::Result<()> {
+            calls += 1;
+            anyhow::bail!("still failing")
+        });
+        assert_eq!(calls, 2);
+        assert!(err.unwrap_err().to_string().contains("still failing"));
     }
 
     #[test]
