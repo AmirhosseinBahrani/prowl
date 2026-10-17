@@ -13,6 +13,9 @@ All notable changes to PRowl are documented here. The format is based on
 - The background service now finds `claude` installed with Homebrew, npm or Claude Code's
   installer. `prowld service install` (and the installer) gives the service the PATH of the
   shell it runs from, and PRowl also looks in the usual install locations.
+- `prowl` no longer exits with "The cursor position could not be read within a normal duration"
+  in terminals that don't answer cursor-position queries (it happened on resize and after
+  editing a policy).
 
 ## [0.1.0] - 2026-10-17
 
