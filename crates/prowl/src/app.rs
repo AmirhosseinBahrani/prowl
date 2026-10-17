@@ -220,6 +220,8 @@ pub struct App {
     pub quit: bool,
     /// First-run setup, as opposed to managing repos from the main screen.
     pub onboarding: bool,
+    /// Enter was pressed in the onboarding picker; finish once the daemon confirms the count.
+    pub confirming_repos: bool,
 }
 
 impl App {
@@ -244,6 +246,7 @@ impl App {
             help: false,
             quit: false,
             onboarding: false,
+            confirming_repos: false,
         }
     }
 
@@ -301,6 +304,15 @@ impl App {
             }
             Msg::WatchedCount(Ok(n)) => {
                 self.status.watched = Some(n);
+                if self.screen == Screen::Repos && std::mem::take(&mut self.confirming_repos) {
+                    if n == 0 {
+                        self.notice =
+                            Some("Watch at least one repository (space) to continue.".into());
+                    } else {
+                        self.screen = Screen::PolicySetup;
+                    }
+                    return vec![];
+                }
                 if matches!(self.screen, Screen::Main | Screen::Repos) {
                     return vec![];
                 }
@@ -582,13 +594,10 @@ impl App {
             },
             Screen::Repos => {
                 if key.code == KeyCode::Enter {
-                    if self.status.watched.unwrap_or(0) == 0 {
-                        self.notice =
-                            Some("Watch at least one repository (space) to continue.".into());
-                        return vec![];
-                    }
-                    self.screen = Screen::PolicySetup;
-                    return vec![];
+                    // Ask the daemon: the cached count can be overwritten by a status refresh
+                    // that started before the last watch.
+                    self.confirming_repos = true;
+                    return vec![Cmd::LoadWatchedCount];
                 }
                 self.on_picker_key(key)
             }
@@ -880,7 +889,8 @@ mod tests {
         assert!(app.onboarding);
         assert!(matches!(&cmds[..], [Cmd::LoadRepos { page: 1, .. }]));
         // Can't finish onboarding without watching something.
-        app.update(key(KeyCode::Enter));
+        assert_eq!(app.update(key(KeyCode::Enter)), [Cmd::LoadWatchedCount]);
+        app.update(Msg::WatchedCount(Ok(0)));
         assert_eq!(app.screen, Screen::Repos);
         assert!(app.notice.is_some());
     }
@@ -957,11 +967,33 @@ mod tests {
         ));
         app.update(Msg::WatchToggled(Ok(repo(1, "acme/api", true, false))));
         assert_eq!(app.status.watched, Some(1));
-        app.update(key(KeyCode::Enter));
-        assert_ne!(
+        // A status refresh that started before the watch lands afterwards.
+        app.update(Msg::StatusBar(StatusBar {
+            watched: Some(0),
+            ..StatusBar::default()
+        }));
+        assert_eq!(app.update(key(KeyCode::Enter)), [Cmd::LoadWatchedCount]);
+        app.update(Msg::WatchedCount(Ok(1)));
+        assert_eq!(
             app.screen,
-            Screen::Repos,
-            "no stale 'watch at least one' refusal"
+            Screen::PolicySetup,
+            "the daemon's count decides, not a stale refresh"
+        );
+    }
+
+    #[test]
+    fn onboarding_needs_a_watched_repository() {
+        let mut app = App::new("sock");
+        app.screen = Screen::Repos;
+        app.onboarding = true;
+        app.update(key(KeyCode::Enter));
+        app.update(Msg::WatchedCount(Ok(0)));
+        assert_eq!(app.screen, Screen::Repos);
+        assert!(
+            app.notice
+                .as_deref()
+                .unwrap()
+                .contains("Watch at least one")
         );
     }
 
@@ -970,8 +1002,8 @@ mod tests {
         let mut app = App::new("sock");
         app.screen = Screen::Repos;
         app.onboarding = true;
-        app.status.watched = Some(1);
         app.update(key(KeyCode::Enter));
+        app.update(Msg::WatchedCount(Ok(1)));
         assert_eq!(app.screen, Screen::PolicySetup);
         assert_eq!(
             app.update(key(KeyCode::Char('e'))),

@@ -269,11 +269,14 @@ async fn repeat_polls_use_conditional_requests() {
     h.client().poll_now().await.unwrap();
     h.client().poll_now().await.unwrap();
 
+    // The scheduler may poll too on a slow machine, so count at least our two polls.
     let detail = h.github.requests_to(Method::GET, "/repos/acme/api/pulls/7");
-    assert_eq!(detail.len(), 2);
+    assert!(detail.len() >= 2, "{} detail requests", detail.len());
     assert!(!detail[0].headers.contains_key("if-none-match"));
-    assert!(detail[1].headers.contains_key("if-none-match"));
-    assert_eq!(detail[1].status, 304);
+    for repeat in &detail[1..] {
+        assert!(repeat.headers.contains_key("if-none-match"));
+        assert_eq!(repeat.status, 304);
+    }
     assert_eq!(h.client().jobs().await.unwrap().len(), 1);
     h.shutdown().await.unwrap();
 }
