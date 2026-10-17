@@ -192,6 +192,71 @@ async fn agent_verdicts_never_approve_a_pr_that_needs_a_human() {
 }
 
 #[tokio::test]
+async fn findings_that_need_a_human_are_posted_as_threads() {
+    let (h, _) = setup(&[7]).await;
+    let mut risky = valid_review();
+    // On a line the PR changed (the fake diff adds src/login_7.rs:1), plus one elsewhere.
+    risky["findings"] = json!([
+        { "file": "src/login_7.rs", "line": 1, "severity": "high", "title": "Token logged",
+          "body": "The session token goes to the log.", "suggestion": "Redact it." },
+        { "file": "docs/auth.md", "line": null, "severity": "low", "title": "Docs outdated",
+          "body": "Mentions the old flow.", "suggestion": null }
+    ]);
+
+    let review = reviewed(&h, &risky).await;
+
+    assert_eq!(review.decision, Some(Decision::NeedsHuman));
+    let posted = h
+        .github
+        .requests_to(Method::POST, &format!("/repos/{REPO}/pulls/7/reviews"));
+    assert_eq!(posted.len(), 1, "one review holding the threads");
+    let threads = posted[0].body.as_ref().unwrap();
+    assert_eq!(
+        threads["event"], "COMMENT",
+        "never a verdict for a PR that needs a human"
+    );
+    let comments = threads["comments"].as_array().unwrap();
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0]["path"], "src/login_7.rs");
+    assert_eq!(comments[0]["line"], 1);
+    let thread = comments[0]["body"].as_str().unwrap();
+    assert!(
+        thread.contains("Token logged") && thread.contains("Redact it."),
+        "{thread}"
+    );
+
+    let comment = h
+        .github
+        .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/comments"))
+        .remove(0);
+    let text = comment.body.as_ref().unwrap()["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(text.contains("Waiting for human approval"));
+    assert!(
+        text.contains(
+            "1 posted as [review threads](https://github.com/acme/api/pull/7#pullrequestreview-907)"
+        ),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Token logged"),
+        "threaded findings aren't repeated:\n{text}"
+    );
+    assert!(
+        text.contains("Docs outdated"),
+        "findings off the diff stay in the comment"
+    );
+    assert_eq!(
+        review.published_url.as_deref(),
+        Some("https://github.com/acme/api/pull/7#issuecomment-707")
+    );
+    assert_eq!(h.client().queue().await.unwrap().len(), 1);
+    h.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_matched_policy_rule_needs_a_human_and_submits_no_review() {
     let (h, _) = setup(&[7]).await;
 
@@ -208,7 +273,7 @@ async fn a_matched_policy_rule_needs_a_human_and_submits_no_review() {
             .requests_to(Method::POST, &format!("/repos/{REPO}/pulls/7/reviews"))
             .is_empty()
     );
-    // Published as a PR comment (ticket 08), never as a review.
+    // Its finding isn't on a changed line, so there are no threads: just the PR comment.
     assert_eq!(
         review.published_url.as_deref(),
         Some("https://github.com/acme/api/pull/7#issuecomment-707")

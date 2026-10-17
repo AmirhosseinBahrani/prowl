@@ -70,7 +70,8 @@ flowchart LR
    diff means a human must review. Signals can only escalate, never downgrade.
 4. **Publish** — agent-only results are posted as a review with inline notes (a comment, or
    with agent verdicts on, an approval or change request as Claude recommends); anything
-   else gets a "⏳ Waiting for human approval" comment explaining why, and lands in your queue.
+   else gets its findings as review threads on the changed lines plus a short "⏳ Waiting for
+   human approval" comment explaining why, and lands in your queue.
 
 ## Quick start
 

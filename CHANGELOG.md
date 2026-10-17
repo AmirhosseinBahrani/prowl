@@ -10,6 +10,13 @@ All notable changes to PRowl are documented here. The format is based on
 
 ### Changed
 
+- When a pull request needs a human, the agent's findings are posted as review threads — one per
+  finding, on the line it's about — instead of inside one long comment. The "⏳ Waiting for
+  human approval" comment keeps the reasons and links to the threads; findings that aren't on a
+  changed line stay in the comment.
+
+### Changed
+
 - Larger pull requests get an agent review: the size limits default to 70,000 changed lines
   (was 3,000) and 350 changed files (was 100). Limits you set yourself are kept.
 

@@ -79,26 +79,9 @@ pub(crate) async fn agent_only(
     target: &Target<'_>,
     review: &ReviewOutput,
 ) -> Result<Submitted, GitHubError> {
-    let mut diff = DiffLines::default();
-    for file in github.pull_files(token, target.repo, target.number).await? {
-        if let Some(patch) = &file.patch {
-            diff.add_patch(&file.filename, patch);
-        }
-    }
-    let (inline, elsewhere): (Vec<&Finding>, Vec<&Finding>) = review
-        .findings
-        .iter()
-        .partition(|f| f.line.is_some_and(|line| diff.contains(&f.file, line)));
+    let (inline, elsewhere) = split_findings(github, token, target, review).await?;
     let body = agent_only_body(target, review, &elsewhere);
-    let comments = inline
-        .into_iter()
-        .map(|f| InlineComment {
-            path: f.file.clone(),
-            line: f.line.expect("partitioned on line"),
-            side: "RIGHT",
-            body: finding_comment(f),
-        })
-        .collect();
+    let comments = threads(&inline);
     let submitted = github
         .create_review(
             token,
@@ -115,12 +98,104 @@ pub(crate) async fn agent_only(
     Ok(submitted)
 }
 
+/// Findings on lines the PR changed (they can be review threads) and the rest.
+async fn split_findings<'r>(
+    github: &GitHub,
+    token: &str,
+    target: &Target<'_>,
+    review: &'r ReviewOutput,
+) -> Result<(Vec<&'r Finding>, Vec<&'r Finding>), GitHubError> {
+    let mut diff = DiffLines::default();
+    for file in github.pull_files(token, target.repo, target.number).await? {
+        if let Some(patch) = &file.patch {
+            diff.add_patch(&file.filename, patch);
+        }
+    }
+    Ok(review
+        .findings
+        .iter()
+        .partition(|f| f.line.is_some_and(|line| diff.contains(&f.file, line))))
+}
+
+/// One review thread per finding, on its line.
+fn threads(findings: &[&Finding]) -> Vec<InlineComment> {
+    findings
+        .iter()
+        .map(|f| InlineComment {
+            path: f.file.clone(),
+            line: f
+                .line
+                .expect("only findings on changed lines become threads"),
+            side: "RIGHT",
+            body: finding_comment(f),
+        })
+        .collect()
+}
+
+/// Posts the findings of a review that needs a human as a COMMENT review with one thread per
+/// finding, reusing one an interrupted attempt already posted. `None` when no finding is on a
+/// changed line.
+async fn post_findings_threads(
+    github: &GitHub,
+    token: &str,
+    target: &Target<'_>,
+    inline: &[&Finding],
+) -> Result<Option<Submitted>, GitHubError> {
+    if inline.is_empty() {
+        return Ok(None);
+    }
+    let already = github
+        .list_reviews(token, target.repo, target.number)
+        .await?
+        .into_iter()
+        .find(|r| {
+            authored_by(r.user.as_ref(), target.reviewer)
+                && r.body
+                    .as_deref()
+                    .is_some_and(|b| b.contains(&marker(target)))
+        });
+    if let Some(r) = already {
+        return Ok(Some(Submitted {
+            id: r.id,
+            html_url: r.html_url.unwrap_or_default(),
+            body: r.body,
+            state: Some(r.state),
+        }));
+    }
+    let body = format!(
+        "### 🔎 PRowl findings\n\n> Written by an AI agent (Claude, run by PRowl) on behalf of @{}. \
+         This pull request **needs a human review** (see PRowl's waiting-for-approval comment). \
+         Each finding below is its own thread — resolve it once it's addressed.\n\n\
+         <sub>Commit {} · policy {} v{}</sub>\n{}",
+        target.reviewer,
+        short(target.head_sha),
+        target.policy_scope,
+        target.policy_version_id,
+        marker(target)
+    );
+    github
+        .create_review(
+            token,
+            target.repo,
+            target.number,
+            &NewReview {
+                commit_id: target.head_sha,
+                body: &body,
+                event: "COMMENT",
+                comments: threads(inline),
+            },
+        )
+        .await
+        .map(Some)
+}
+
 /// Publishes a decided review, reusing what PRowl posted on this PR before (`prior`, updated
 /// in place to describe what is now posted):
 /// - AGENT_ONLY: a new COMMENT review (inline notes need the new commit). The previous agent
 ///   review is marked superseded, and a waiting-for-approval comment is marked resolved.
-/// - NEEDS_HUMAN: the waiting-for-approval comment, edited if it exists. A previous agent
-///   review is marked superseded and its label removed.
+/// - NEEDS_HUMAN: findings on changed lines as a COMMENT review with a thread each, then the
+///   waiting-for-approval comment (edited if it exists) with the reasons and the remaining
+///   findings. A previous PRowl review is marked superseded and its label removed.
 pub(crate) async fn publish_result(
     github: &GitHub,
     token: &str,
@@ -202,7 +277,15 @@ pub(crate) async fn publish_result(
                     })
                     .map(|c| (c.id, c.html_url));
             }
-            let body = needs_human_body(target, review.ok(), reasons);
+            let (inline, elsewhere) = match review {
+                Ok(review) => split_findings(github, token, target, review).await?,
+                Err(_) => (Vec::new(), Vec::new()),
+            };
+            let findings_review = post_findings_threads(github, token, target, &inline).await?;
+            let threads_note = findings_review
+                .as_ref()
+                .map(|r| (inline.len(), r.html_url.as_str()));
+            let body = needs_human_body(target, review.ok(), reasons, &elsewhere, threads_note);
             let existing = match &prior.comment {
                 Some((id, _)) => ignore_missing(
                     github
@@ -221,7 +304,11 @@ pub(crate) async fn publish_result(
                 }
             };
             add_label(github, token, target.repo, target.number, LABEL_NEEDS_HUMAN).await?;
-            if let Some((old, _)) = prior.agent_review.take() {
+            if let Some((old, _)) = prior
+                .agent_review
+                .take()
+                .filter(|(old, _)| Some(*old) != findings_review.as_ref().map(|r| r.id))
+            {
                 let body = superseded_body(target, &comment.html_url);
                 ignore_missing(
                     github
@@ -238,6 +325,8 @@ pub(crate) async fn publish_result(
                     .await?;
             }
             prior.comment = Some((comment.id, comment.html_url.clone()));
+            // The findings review is PRowl's review of this commit; a later one supersedes it.
+            prior.agent_review = findings_review.map(|r| (r.id, r.html_url));
             Ok(comment)
         }
     }
@@ -318,10 +407,14 @@ fn resolved_body(target: &Target<'_>, review_url: &str) -> String {
     )
 }
 
+/// The waiting-for-approval comment. `listed` are the findings written out here; with
+/// `threads` = `(count, review url)`, the others were posted as review threads.
 pub(crate) fn needs_human_body(
     target: &Target<'_>,
     review: Option<&ReviewOutput>,
     reasons: &[Reason],
+    listed: &[&Finding],
+    threads: Option<(usize, &str)>,
 ) -> String {
     let mut body = String::new();
     body.push_str(
@@ -356,8 +449,12 @@ pub(crate) fn needs_human_body(
                 }
                 body.push('\n');
             }
-            let findings: Vec<&Finding> = review.findings.iter().collect();
-            push_findings(&mut body, &findings);
+            if let Some((count, url)) = threads {
+                body.push_str(&format!(
+                    "**Findings:** {count} posted as [review threads]({url}) on the changed lines.\n\n"
+                ));
+            }
+            push_findings(&mut body, listed);
         }
         None if reasons.iter().any(|r| matches!(r, Reason::TooLarge { .. })) => body.push_str(
             "PRowl did not run the agent on this pull request, so there are no automated notes.\n\n",
