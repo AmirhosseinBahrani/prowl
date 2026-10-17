@@ -16,8 +16,8 @@ and are stored in the daemon's database. Scripts can use the Local API instead
 | `daily_budget_usd` | none | > 0 | Claude spend allowed per day. When reached, reviews wait for the next day. Dry runs count too. |
 | `budget_day` | `utc` | `utc`, `local` | When the daily budget resets: UTC midnight or local midnight. |
 | `risk_threshold` | `60` | 1–100 | A review whose risk score reaches this needs a human. |
-| `max_changed_lines` | `3000` | ≥ 1 | Larger PRs (added + deleted lines) go straight to a human, without a Claude run. |
-| `max_changed_files` | `100` | ≥ 1 | Likewise for the number of changed files. |
+| `max_changed_lines` | `70000` | ≥ 1 | Larger PRs (added + deleted lines) go straight to a human, without a Claude run. |
+| `max_changed_files` | `350` | ≥ 1 | Likewise for the number of changed files. |
 | `sleep_mode` | `ac_only` with a battery, else `always` | `always`, `ac_only`, `during_reviews` | When PRowl keeps the machine awake. See [sleep](#sleep). |
 | `skip_drafts` | `true` | — | Ignore draft PRs until they're marked ready. |
 | `include_team_requests` | `false` | — | Also review PRs requested from a team you're in, not only from you personally. |

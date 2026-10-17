@@ -6,6 +6,11 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- Larger pull requests get an agent review: the size limits default to 70,000 changed lines
+  (was 3,000) and 350 changed files (was 100). Limits you set yourself are kept.
+
 ## [0.1.3] - 2026-10-17
 
 ### Added

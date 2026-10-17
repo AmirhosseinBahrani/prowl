@@ -69,7 +69,7 @@ async fn each_run_is_capped_at_what_is_left_of_the_budget() {
 async fn an_oversized_pr_goes_to_a_human_without_running_claude() {
     let (h, commits) = setup(&[7]).await;
     let mut huge = pr_json(7, &commits[0], &["octo"]);
-    huge["additions"] = 4000.into();
+    huge["additions"] = 80_000.into();
     huge["deletions"] = 500.into();
     huge["changed_files"] = 42.into();
     h.github
@@ -84,17 +84,17 @@ async fn an_oversized_pr_goes_to_a_human_without_running_claude() {
     assert_eq!(
         review.decision_reasons,
         [Reason::TooLarge {
-            changed_lines: 4500,
+            changed_lines: 80_500,
             changed_files: 42,
-            max_lines: 3000,
-            max_files: 100
+            max_lines: 70_000,
+            max_files: 350
         }]
     );
     let comment = &h
         .github
         .requests_to(Method::POST, "/repos/acme/api/issues/7/comments")[0];
     let body = comment.body.as_ref().unwrap()["body"].as_str().unwrap();
-    assert!(body.contains("Too large for an automated review: 4500 changed lines in 42 files"));
+    assert!(body.contains("Too large for an automated review: 80500 changed lines in 42 files"));
     assert!(body.contains("PRowl did not run the agent"));
     assert_eq!(h.client().queue().await.unwrap().len(), 1);
     h.shutdown().await.unwrap();
