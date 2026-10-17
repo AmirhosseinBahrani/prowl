@@ -106,6 +106,8 @@ pub enum Msg {
     ServiceInstalled(Result<String, String>),
     Policies(Result<Vec<PolicySummary>, String>),
     Policy(Result<EffectivePolicy, String>),
+    /// The override for this repository no longer exists (e.g. it was just deleted).
+    PolicyGone(String),
     Versions(Result<Vec<PolicyVersion>, String>),
     /// The editor closed (or failed to start).
     Edited(Result<(), String>),
@@ -394,6 +396,13 @@ impl App {
                 vec![]
             }
             Msg::Policies(Ok(list)) => self.policy.on_policies(list),
+            // A list fetched before a delete can still name the override; fetch it again.
+            Msg::PolicyGone(scope) => {
+                if self.policy.content.as_ref().map(|p| p.scope.as_str()) == Some(scope.as_str()) {
+                    self.policy.content = None;
+                }
+                vec![Cmd::LoadPolicies]
+            }
             Msg::Policy(Ok(policy)) => {
                 if self.policy.selected_scope().as_deref() == Some(policy.scope.as_str()) {
                     self.policy.content = Some(policy);
@@ -1117,6 +1126,23 @@ mod tests {
         app.update(key(KeyCode::Left));
         assert_eq!(app.tab, Tab::Policy);
         assert!(app.policy.input.is_some());
+    }
+
+    #[test]
+    fn a_policy_that_vanished_reloads_the_list_instead_of_showing_an_error() {
+        let mut app = App::new("sock");
+        app.screen = Screen::Main;
+        app.tab = Tab::Policy;
+        app.notice = Some("Deleted the override for acme/api.".into());
+
+        let cmds = app.update(Msg::PolicyGone("acme/api".into()));
+
+        assert_eq!(cmds, [Cmd::LoadPolicies]);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("Deleted the override for acme/api."),
+            "the delete's confirmation stays"
+        );
     }
 
     fn healthy() -> Doctor {

@@ -177,7 +177,14 @@ fn execute(
             Cmd::InstallService => Msg::ServiceInstalled(install_service(home).await),
             Cmd::LoadPolicies => Msg::Policies(client.policies().await.map_err(err)),
             Cmd::LoadPolicy { scope } => match parse_scope(&scope) {
-                Ok(scope) => Msg::Policy(client.policy(&scope).await.map_err(err)),
+                Ok(parsed) => match client.policy(&parsed).await {
+                    Err(prowld::client::ClientError::Status { status, .. })
+                        if status == 404 && scope != "global" =>
+                    {
+                        Msg::PolicyGone(scope)
+                    }
+                    result => Msg::Policy(result.map_err(err)),
+                },
                 Err(e) => Msg::Policy(Err(e)),
             },
             Cmd::LoadVersions { scope } => match parse_scope(&scope) {
