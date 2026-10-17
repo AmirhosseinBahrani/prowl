@@ -6,6 +6,8 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-17
+
 ### Added
 
 - The Settings tab shows your GitHub account: `t` signs in with a personal access token
@@ -82,7 +84,8 @@ First public version.
 - One-line installers (`install.sh`, `install.ps1`) that verify checksums, install into your home
   directory with versioned upgrades, and start the background service.
 
-[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/AmirhosseinBahrani/prowl/releases/tag/v0.1.0
