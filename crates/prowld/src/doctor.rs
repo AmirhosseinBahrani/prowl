@@ -54,8 +54,10 @@ async fn check_claude(claude: &Claude, env: &[(String, String)]) -> ClaudeCheck 
         return ClaudeCheck {
             tool: ToolCheck {
                 problem: Some(
-                    "The claude CLI was not found. Install Claude Code (https://claude.com/claude-code) \
-                     and make sure `claude` is on the PATH the PRowl service uses."
+                    "The claude CLI was not found on the PRowl service's PATH or in the usual \
+                     install locations. Install Claude Code (https://claude.com/claude-code); if it \
+                     is installed, run `prowld service install` from a terminal where `claude` \
+                     works, so the service uses that terminal's PATH."
                         .into(),
                 ),
                 ..Default::default()
@@ -90,7 +92,7 @@ async fn check_claude(claude: &Claude, env: &[(String, String)]) -> ClaudeCheck 
 }
 
 async fn check_git() -> ToolCheck {
-    let Ok(bin) = which::which("git") else {
+    let Some(bin) = crate::tools::find("git") else {
         let hint = if cfg!(windows) {
             "Git was not found. Install Git for Windows (https://git-scm.com/download/win)."
         } else {

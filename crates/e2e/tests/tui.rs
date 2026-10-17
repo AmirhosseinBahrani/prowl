@@ -10,9 +10,62 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use prowl_e2e::Harness;
 use prowld::{ApiClient, RepoQuery};
 use ratatui::Terminal;
-use ratatui::backend::TestBackend;
+use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+use ratatui::buffer::Cell;
+use ratatui::layout::{Position, Size};
 use serde_json::json;
 use tokio::sync::mpsc;
+
+/// A test terminal that, like some real ones, never answers a cursor-position query
+/// (crossterm then fails with "The cursor position could not be read within a normal
+/// duration"). The TUI must work without asking.
+struct NoCursorReply(TestBackend);
+
+/// Passes on a `TestBackend` result, which can't fail.
+fn ok<T>(result: Result<T, std::convert::Infallible>) -> std::io::Result<T> {
+    let Ok(value) = result;
+    Ok(value)
+}
+
+impl Backend for NoCursorReply {
+    type Error = std::io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        ok(self.0.draw(content))
+    }
+    fn hide_cursor(&mut self) -> std::io::Result<()> {
+        ok(self.0.hide_cursor())
+    }
+    fn show_cursor(&mut self) -> std::io::Result<()> {
+        ok(self.0.show_cursor())
+    }
+    fn get_cursor_position(&mut self) -> std::io::Result<Position> {
+        Err(std::io::Error::other(
+            "The cursor position could not be read within a normal duration",
+        ))
+    }
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> std::io::Result<()> {
+        ok(self.0.set_cursor_position(position))
+    }
+    fn clear(&mut self) -> std::io::Result<()> {
+        ok(self.0.clear())
+    }
+    fn clear_region(&mut self, clear_type: ClearType) -> std::io::Result<()> {
+        ok(self.0.clear_region(clear_type))
+    }
+    fn size(&self) -> std::io::Result<Size> {
+        ok(self.0.size())
+    }
+    fn window_size(&mut self) -> std::io::Result<WindowSize> {
+        ok(self.0.window_size())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        ok(Backend::flush(&mut self.0))
+    }
+}
 
 /// URLs the TUI asked to open, across tests (each test checks for its own).
 static OPENED: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -37,7 +90,7 @@ impl Tui {
         let screen = Arc::new(Mutex::new(String::new()));
         let snapshot = screen.clone();
         let task = tokio::spawn(async move {
-            let mut terminal = Terminal::new(TestBackend::new(100, 34)).unwrap();
+            let mut terminal = Terminal::new(NoCursorReply(TestBackend::new(100, 34))).unwrap();
             prowl::run(
                 &mut terminal,
                 client,

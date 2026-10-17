@@ -6,6 +6,17 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-17
+
+### Fixed
+
+- The background service now finds `claude` installed with Homebrew, npm or Claude Code's
+  installer. `prowld service install` (and the installer) gives the service the PATH of the
+  shell it runs from, and PRowl also looks in the usual install locations.
+- `prowl` no longer exits with "The cursor position could not be read within a normal duration"
+  in terminals that don't answer cursor-position queries (it happened on resize and after
+  editing a policy).
+
 ## [0.1.0] - 2026-10-17
 
 First public version.
@@ -31,5 +42,6 @@ First public version.
 - One-line installers (`install.sh`, `install.ps1`) that verify checksums, install into your home
   directory with versioned upgrades, and start the background service.
 
-[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/AmirhosseinBahrani/prowl/releases/tag/v0.1.0

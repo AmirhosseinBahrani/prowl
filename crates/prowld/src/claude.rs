@@ -79,8 +79,7 @@ impl Claude {
         match &self.settings.bin {
             Some(bin) if bin.exists() => Ok(bin.clone()),
             Some(_) => Err(ClaudeError::NotFound),
-            // `which` resolves `claude.exe` / `claude.cmd` on Windows.
-            None => which::which("claude").map_err(|_| ClaudeError::NotFound),
+            None => crate::tools::find("claude").ok_or(ClaudeError::NotFound),
         }
     }
 

@@ -10,6 +10,7 @@ use prowld::{ApiClient, AuthState, RepoQuery};
 use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 
 use crate::app::{App, Cmd, Msg, PER_PAGE, StatusBar};
@@ -90,9 +91,8 @@ where
             input = keys.recv() => match input {
                 Some(Input::Key(key)) => Msg::Key(key),
                 Some(Input::Resize) => {
-                    terminal.autoresize()?;
                     // Links are re-written per draw, so start the new size from a clean screen.
-                    terminal.clear()?;
+                    redraw_from_scratch(terminal)?;
                     continue;
                 }
                 None => break,
@@ -343,6 +343,14 @@ fn parse_scope(scope: &str) -> Result<prowld::policy::Scope, String> {
     }
 }
 
+/// Clears the screen and makes the next draw repaint everything. Unlike `Terminal::clear`, this
+/// never asks the terminal for the cursor position, which some terminals answer slowly or not
+/// at all ("The cursor position could not be read within a normal duration").
+fn redraw_from_scratch<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+    let size = terminal.size()?;
+    terminal.resize(Rect::new(0, 0, size.width, size.height))
+}
+
 async fn create_override<B: Backend>(
     terminal: &mut Terminal<B>,
     client: &ApiClient,
@@ -392,7 +400,7 @@ where
             if let Some(paused) = &options.input_paused {
                 let _ = paused.send(false);
             }
-            terminal.clear().map_err(|e| e.to_string())?;
+            redraw_from_scratch(terminal).map_err(|e| e.to_string())?;
             result?;
         }
     }
