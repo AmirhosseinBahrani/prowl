@@ -74,15 +74,14 @@ flowchart LR
 **Requirements:** the [Claude Code CLI](https://claude.com/claude-code) (`claude`, logged in) and
 `git`.
 
-1. **Install PRowl** — see [Install](#install).
+1. **Install PRowl** (this also starts the background service) — see [Install](#install):
+   ```sh
+   curl -fsSL https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/install.sh | sh
+   ```
 2. **Choose how PRowl signs in to GitHub** — a GitHub OAuth App you register once (sign in with
    a one-time code; works across all your organisations) or a personal access token. See
    [docs/github-setup.md](docs/github-setup.md).
-3. **Start the background service** (it then starts at every login):
-   ```sh
-   prowld service install
-   ```
-4. **Open the terminal UI** and follow the setup — connect GitHub (`enter` for a one-time code,
+3. **Open the terminal UI** and follow the setup — connect GitHub (`enter` for a one-time code,
    `t` for a token), pick repositories, look at your Review Policy:
    ```sh
    prowl
@@ -90,19 +89,48 @@ flowchart LR
 
 ## Install
 
-Releases are published for macOS (Apple silicon and Intel), Linux (x86_64 and ARM) and Windows.
+**macOS and Linux**
 
-| Platform | How |
+```sh
+curl -fsSL https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/install.sh | sh
+```
+
+**Windows** (PowerShell)
+
+```powershell
+irm https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/install.ps1 | iex
+```
+
+The installer downloads the build for your machine, verifies its checksum, installs it into your
+home directory (no `sudo` or admin rights), starts the background service, and tells you if
+anything is missing. Run it again any time to upgrade. A specific version or skipping the service:
+
+```sh
+curl -fsSL …/install.sh | sh -s v0.1.0                # or: sh -s -- --no-service
+& ([scriptblock]::Create((irm …/install.ps1))) v0.1.0  # or: -NoService
+```
+
+On macOS and Linux each version lives in `~/.local/share/prowl/versions/` with `prowl`,
+`prowld` and `prowld-service` linked from `~/.local/bin`; the previous version is kept.
+
+<details>
+<summary>Other ways to install</summary>
+
+| | |
 |---|---|
-| macOS / Linux | Download `prowl.rb` from the [latest release](https://github.com/AmirhosseinBahrani/prowl/releases/latest), then `brew install ./prowl.rb` |
+| Homebrew | Download `prowl.rb` from the [latest release](https://github.com/AmirhosseinBahrani/prowl/releases/latest), then `brew install ./prowl.rb` |
 | Debian / Ubuntu | `sudo apt install ./prowl_<version>_amd64.deb` |
 | Fedora / RHEL | `sudo dnf install ./prowl-<version>-1.x86_64.rpm` |
-| Windows | `scoop install https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/prowl.json` |
-| Anywhere | Unpack the archive for your platform and put `prowl`, `prowld` and `prowld-service` on your `PATH` |
+| Scoop | `scoop install https://github.com/AmirhosseinBahrani/prowl/releases/latest/download/prowl.json` |
+| Archive | Unpack the archive for your platform and put `prowl`, `prowld` and `prowld-service` on your `PATH` |
 | From source | `cargo install --locked --path crates/prowld && cargo install --locked --path crates/prowl` |
+
+With these, start the background service yourself: `prowld service install`.
 
 > **macOS:** keep the binaries out of `~/Desktop`, `~/Documents` and `~/Downloads` — macOS does not
 > let background services run programs from those folders.
+
+</details>
 
 ## Using PRowl
 

@@ -92,4 +92,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" --title "PRowl $GITHUB_REF_NAME" --generate-notes \
-            dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.sha256 dist/prowl.rb dist/prowl.json
+            dist/*.tar.gz dist/*.zip dist/*.deb dist/*.rpm dist/*.sha256 dist/prowl.rb dist/prowl.json \
+            install.sh install.ps1
+
+  # Installs the release just published the way users do, on every platform.
+  install-check:
+    needs: release
+    name: install-check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    steps:
+      - name: Install with install.sh
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/install.sh" | sh -s "$GITHUB_REF_NAME" --no-service
+          "$HOME/.local/bin/prowl" --version
+          "$HOME/.local/bin/prowld" --version
+      - name: Install with install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $script = Invoke-RestMethod "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/install.ps1"
+          & ([scriptblock]::Create($script)) $env:GITHUB_REF_NAME -NoService
+          & "$env:LOCALAPPDATA\Programs\prowl\prowl.exe" --version
+          & "$env:LOCALAPPDATA\Programs\prowl\prowld.exe" --version

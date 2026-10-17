@@ -65,6 +65,7 @@ pub(crate) struct Auth {
 struct Inner {
     github: GitHub,
     client_id: Option<String>,
+    client_id_file: Option<std::path::PathBuf>,
     credentials: CredentialStore,
     db: SqlitePool,
     events: EventBus,
@@ -78,6 +79,7 @@ impl Auth {
     pub(crate) async fn load(
         github: GitHub,
         client_id: Option<String>,
+        client_id_file: Option<std::path::PathBuf>,
         credentials: CredentialStore,
         db: SqlitePool,
         events: EventBus,
@@ -102,6 +104,7 @@ impl Auth {
             inner: Arc::new(Inner {
                 github,
                 client_id,
+                client_id_file,
                 credentials,
                 db,
                 events,
@@ -167,7 +170,13 @@ impl Auth {
 
     /// Starts a device flow and polls GitHub in the background until it resolves.
     pub(crate) async fn start_device_flow(&self) -> Result<AuthState, AuthError> {
-        let client_id = self.inner.client_id.clone().ok_or(AuthError::NoClientId)?;
+        let client_id = self
+            .inner
+            .client_id_file
+            .as_deref()
+            .and_then(crate::config::read_client_id_file)
+            .or_else(|| self.inner.client_id.clone())
+            .ok_or(AuthError::NoClientId)?;
         let code = self
             .inner
             .github

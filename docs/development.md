@@ -55,7 +55,11 @@ See [architecture](architecture.md). Database migrations are in `crates/prowld/m
 1. Update `version` in the root `Cargo.toml` and `CHANGELOG.md`.
 2. Tag and push: `git tag v0.2.0 && git push origin v0.2.0`.
 3. The Release workflow builds all targets, creates the GitHub release with archives, `.deb`,
-   `.rpm`, checksums, a Homebrew formula and a Scoop manifest.
+   `.rpm`, checksums, a Homebrew formula, a Scoop manifest and the `install.sh` / `install.ps1`
+   installers, then installs the new release with them on macOS, Linux and Windows.
+
+To try the installer against your own builds, serve a directory laid out like
+`download/<tag>/<archive>` and point `PROWL_RELEASES_URL` at it.
 
 Set the repository variable `PROWL_GITHUB_CLIENT_ID` to build the project's OAuth App client id
 into release binaries. Optional macOS signing uses the `MACOS_CERTIFICATE`,

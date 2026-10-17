@@ -26,6 +26,9 @@ pub struct Config {
     pub github_web_url: String,
     /// Client ID of the PRowl GitHub OAuth App (device flow must be enabled on it).
     pub github_client_id: Option<String>,
+    /// Re-read at each login so a client id saved after the daemon started is picked up;
+    /// `None` when `PROWL_GITHUB_CLIENT_ID` is set, which always wins.
+    pub github_client_id_file: Option<PathBuf>,
     pub credentials: CredentialBackend,
     /// How often policy files are checked for edits made outside PRowl.
     pub policy_sync_interval: Duration,
@@ -79,6 +82,9 @@ impl Config {
         let home = home.into();
         Self {
             github_client_id: client_id(&home),
+            github_client_id_file: std::env::var_os("PROWL_GITHUB_CLIENT_ID")
+                .is_none()
+                .then(|| home.join(CLIENT_ID_FILE)),
             home,
             github_api_url: "https://api.github.com".into(),
             github_web_url: "https://github.com".into(),
@@ -121,20 +127,22 @@ impl Config {
 /// The OAuth App client id: `PROWL_GITHUB_CLIENT_ID`, else the `github-client-id` file in the
 /// home, else the one built into this binary.
 fn client_id(home: &Path) -> Option<String> {
-    let from_file = || {
-        std::fs::read_to_string(home.join(CLIENT_ID_FILE))
-            .ok()
-            .map(|s| s.trim().to_owned())
-    };
     [
         std::env::var("PROWL_GITHUB_CLIENT_ID").ok(),
-        from_file(),
+        read_client_id_file(&home.join(CLIENT_ID_FILE)),
         option_env!("PROWL_GITHUB_CLIENT_ID").map(str::to_owned),
     ]
     .into_iter()
     .flatten()
     .map(|id| id.trim().to_owned())
     .find(|id| !id.is_empty())
+}
+
+/// The client id saved in `path`, if the file exists and isn't empty.
+pub(crate) fn read_client_id_file(path: &Path) -> Option<String> {
+    let id = std::fs::read_to_string(path).ok()?;
+    let id = id.trim();
+    (!id.is_empty()).then(|| id.to_owned())
 }
 
 /// OS-appropriate data directory, e.g. `~/Library/Application Support/dev.prowl.prowl`.
