@@ -74,6 +74,12 @@ pub struct Config {
     pub power_check_interval: Duration,
     /// A wall-clock jump this much beyond a check interval counts as the machine sleeping.
     pub wake_gap: Duration,
+    /// Repository whose releases are checked for a newer PRowl; `None` turns the check off.
+    pub update_repo: Option<String>,
+    /// How often to check for a newer release.
+    pub update_check_interval: Duration,
+    /// How soon to try again when the check couldn't run (no account yet, GitHub unreachable).
+    pub update_check_retry: Duration,
     /// Path to the `claude` executable; `None` means look it up on PATH.
     pub claude_bin: Option<PathBuf>,
     /// Extra environment passed to every `claude` process.
@@ -114,6 +120,11 @@ impl Config {
             power: None,
             power_check_interval: Duration::from_secs(5),
             wake_gap: Duration::from_secs(30),
+            update_repo: std::env::var("PROWL_UPDATE_REPO")
+                .map(|r| Some(r).filter(|r| !r.is_empty()))
+                .unwrap_or_else(|_| Some("AmirhosseinBahrani/prowl".into())),
+            update_check_interval: Duration::from_secs(6 * 3600),
+            update_check_retry: Duration::from_secs(60),
             claude_bin: None,
             claude_env: Vec::new(),
         }

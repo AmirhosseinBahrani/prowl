@@ -77,6 +77,8 @@ impl Harness {
         config.power_check_interval = std::time::Duration::from_millis(50);
         config.wake_gap = std::time::Duration::from_secs(1);
         config.claude_bin = Some(claude.bin());
+        // Tests that want the release check turn it on.
+        config.update_repo = None;
         config.claude_env = claude.env();
         config.git_base_url = home
             .join("remotes")

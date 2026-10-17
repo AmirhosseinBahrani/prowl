@@ -145,6 +145,15 @@ pub fn describe(event: &Event) -> (Tone, String) {
     use Tone::*;
     match event.kind.as_str() {
         "daemon.started" => (Dim, format!("prowld {} started", s("version"))),
+        "update.available" => (
+            Warn,
+            format!(
+                "PRowl {} is available (you have {}); rerun the installer to update: {}",
+                s("latest"),
+                s("current"),
+                s("url")
+            ),
+        ),
         "auth.connected" => (Good, format!("connected to GitHub as @{}", s("login"))),
         "auth.pending" => (
             Normal,
