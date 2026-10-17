@@ -24,6 +24,19 @@ All notable changes to PRowl are documented here. The format is based on
   error` (leaving PRowl stopped): reinstalling the background service now waits for launchd to
   finish unloading the old one, and retries briefly.
 
+### Security
+
+- **Prompt-injection defences**: PRowl scans each PR's title, description, commit messages and
+  added lines for text written to steer the AI reviewer and for hidden or reordering Unicode
+  (Trojan Source), and the agent reports attempts it notices. Either makes the PR need a human —
+  the comment shows where — and a suspect review is never approved, not even by a verification
+  you ask for.
+- **Credential-theft defences**: symlinks in a PR are checked out as plain files (so they can't
+  point Claude at `~/.ssh` or other files outside the checkout); Claude runs with an allow-listed
+  environment, so tokens and keys in the daemon's environment never reach it; and credentials —
+  including PRowl's own GitHub token — are redacted from reviews before they're stored or
+  posted, sending the PR to a human.
+
 ## [0.1.5] - 2026-10-17
 
 ### Added

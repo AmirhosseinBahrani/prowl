@@ -40,7 +40,11 @@ from a terminal UI that is just as happy over SSH.
 - **Your Claude, your machine.** Reviews run through your own `claude` CLI and subscription. Code
   is checked out locally and never leaves your machine except as Claude's normal API traffic.
 - **Safe with untrusted code.** Claude only gets read-only file tools in a sandboxed session — no
-  shell, no network, no settings or hooks from the PR's repository. PRowl never runs PR code.
+  shell, no network, no settings or hooks from the PR's repository, no symlinks out of the
+  checkout and no secrets in its environment. PRowl never runs PR code.
+- **Resists prompt injection and credential theft.** PRs that try to steer the AI reviewer, or
+  hide code behind invisible Unicode, are sent to you and never approved; credentials are
+  redacted from anything PRowl posts.
 - **Approves only what you allow.** By default the agent posts comment reviews and approving is
   your explicit action. Turn on *agent verdicts* and it approves (or requests changes on)
   low-risk PRs your policy leaves to it — never one that needs a human, and it withdraws its

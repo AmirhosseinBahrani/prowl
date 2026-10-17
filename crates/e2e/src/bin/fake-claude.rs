@@ -40,6 +40,13 @@ fn main() {
         })
         .unwrap_or_default();
     files.sort();
+    let symlinks: Vec<String> = files
+        .iter()
+        .filter(|f| {
+            std::fs::symlink_metadata(cwd.join(f)).is_ok_and(|m| m.file_type().is_symlink())
+        })
+        .cloned()
+        .collect();
     let git_head = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(&cwd)
@@ -67,6 +74,8 @@ fn main() {
         git_head,
         review_diff,
         review_commits,
+        env: std::env::vars().map(|(name, _)| name).collect(),
+        symlinks,
     };
     let n = record(&dir, &invocation);
 

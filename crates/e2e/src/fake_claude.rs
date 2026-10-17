@@ -35,6 +35,12 @@ pub struct ClaudeInvocation {
     pub review_diff: Option<String>,
     #[serde(default)]
     pub review_commits: Option<String>,
+    /// Names of the environment variables the CLI was started with.
+    #[serde(default)]
+    pub env: Vec<String>,
+    /// Entries at the top of `cwd` that are symbolic links.
+    #[serde(default)]
+    pub symlinks: Vec<String>,
 }
 
 impl ClaudeInvocation {

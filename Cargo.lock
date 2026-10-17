@@ -2496,6 +2496,7 @@ dependencies = [
  "libc",
  "notify-rust",
  "rand 0.9.5",
+ "regex",
  "reqwest",
  "rpassword",
  "serde",

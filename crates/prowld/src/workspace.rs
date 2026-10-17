@@ -85,13 +85,17 @@ impl Workspace {
             .await;
         let _ = git(&bare, &[]).args(["worktree", "prune"]).run().await;
         std::fs::create_dir_all(&self.worktrees_dir)?;
+        // A PR can add a symlink pointing outside the checkout (`notes.txt -> ~/.ssh/id_rsa`)
+        // and ask Claude to read it. Check symlinks out as plain files holding the link's target
+        // instead, and remove any that still turn up.
         git(&bare, &[])
-            .args(["worktree", "add", "--detach"])
+            .args(["-c", "core.symlinks=false", "worktree", "add", "--detach"])
             .arg(&worktree)
             .arg(head_sha)
             .run()
             .await
             .with_context(|| format!("checking out {head_sha}"))?;
+        remove_symlinks(&worktree)?;
         let material = self.material_dir.join(job_id.to_string());
         write_review_material(&worktree, &material, base_sha).await?;
         Ok(Checkout { worktree, material })
@@ -340,6 +344,22 @@ fn base64_encode(bytes: &[u8]) -> String {
 
 fn git(dir: &Path, env: &[(String, String)]) -> Git {
     Git::new(dir, env)
+}
+
+/// Deletes every symbolic link under `dir` (not following them), so nothing in a checkout can
+/// point outside it.
+fn remove_symlinks(dir: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_symlink() {
+            // On Windows a directory symlink needs remove_dir.
+            std::fs::remove_file(entry.path()).or_else(|_| std::fs::remove_dir(entry.path()))?;
+        } else if kind.is_dir() && entry.file_name() != ".git" {
+            remove_symlinks(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 struct Git(Command);

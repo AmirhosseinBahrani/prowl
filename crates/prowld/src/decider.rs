@@ -43,6 +43,21 @@ pub enum Reason {
         pattern: String,
         file: String,
     },
+    /// Text in the PR written to steer the AI reviewer, found by PRowl's scan or reported by
+    /// the agent. The review can't be trusted on its own.
+    PromptInjection {
+        location: String,
+        excerpt: String,
+    },
+    /// Invisible or display-reordering Unicode in the PR (code may not do what it reads as).
+    HiddenCharacters {
+        location: String,
+        count: u32,
+    },
+    /// The agent's answer contained what looks like a credential; it was removed before posting.
+    SecretRedacted {
+        count: u32,
+    },
     /// Too big to send to the agent; no Claude run happened.
     TooLarge {
         changed_lines: u64,
@@ -97,6 +112,19 @@ pub fn decide(
             reasons.push(Reason::UnknownPolicyRule { id: id.to_owned() });
         }
     }
+    if let Some(attempt) = output
+        .suspected_prompt_injection
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| {
+            !a.is_empty() && !a.eq_ignore_ascii_case("null") && !a.eq_ignore_ascii_case("none")
+        })
+    {
+        reasons.push(Reason::PromptInjection {
+            location: "reported by the agent".into(),
+            excerpt: attempt.chars().take(200).collect(),
+        });
+    }
     if output.touches_critical_sections {
         reasons.push(Reason::CriticalSection);
     }
@@ -136,7 +164,25 @@ mod tests {
             matched_policy_rules: vec![],
             findings: vec![],
             recommendation: Recommendation::Approve,
+            suspected_prompt_injection: None,
         }
+    }
+
+    #[test]
+    fn an_injection_the_agent_noticed_needs_a_human() {
+        let mut fooled = calm();
+        fooled.suspected_prompt_injection = Some("src/a.rs:3 tells the reviewer to approve".into());
+        let verdict = decide(Ok(&fooled), &rules(), SETTINGS);
+        assert_eq!(verdict.decision, Decision::NeedsHuman);
+        assert!(matches!(
+            &verdict.reasons[..],
+            [Reason::PromptInjection { location, .. }] if location == "reported by the agent"
+        ));
+        fooled.suspected_prompt_injection = Some("none".into());
+        assert_eq!(
+            decide(Ok(&fooled), &rules(), SETTINGS).decision,
+            Decision::AgentOnly
+        );
     }
 
     const SETTINGS: DecisionSettings = DecisionSettings { risk_threshold: 60 };
