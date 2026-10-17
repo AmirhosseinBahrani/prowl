@@ -57,8 +57,9 @@ register an app.
   **Pull requests: Read and write**, **Contents: Read**, **Issues: Read and write** (labels and
   comments) and **Metadata: Read**. Organisations may require approval of fine-grained tokens.
 
-Then sign in with it — in the TUI's **Connect GitHub** screen press `t` and paste the token, or
-from a shell:
+Then sign in with it — in the TUI press `t` on the **Connect GitHub** screen, or in the
+**Settings** tab when you're already signed in (it replaces the current sign-in), and paste the
+token. Or from a shell:
 
 ```sh
 prowld login --token            # prompts for the token without echoing it
@@ -69,6 +70,7 @@ PRowl checks the token against GitHub before storing it in your OS keychain.
 
 ## Disconnecting
 
-`prowld logout`, or **Disconnect** in the TUI, deletes the stored token. To revoke access on
+In the TUI's **Settings** tab press `l` (and `y` to confirm), or run `prowld logout`; either
+deletes the stored token and PRowl stops reviewing until you sign in again. To revoke access on
 GitHub's side as well, remove the app at <https://github.com/settings/applications> or delete the
 token.

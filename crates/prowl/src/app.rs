@@ -146,6 +146,7 @@ pub enum Cmd {
     LoadAuth,
     LoadWatchedCount,
     StartLogin,
+    SignOut,
     SignInWithToken {
         token: String,
     },
@@ -225,6 +226,8 @@ pub struct App {
     pub token_input: Option<String>,
     /// Why the last sign-in attempt was refused.
     pub login_error: Option<String>,
+    /// "Sign out of GitHub?" is waiting for an answer (Settings tab).
+    pub confirm_sign_out: bool,
     pub repos: RepoPicker,
     pub policy: PolicyTab,
     pub feed: FeedTab,
@@ -254,6 +257,7 @@ impl App {
             auth: None,
             token_input: None,
             login_error: None,
+            confirm_sign_out: false,
             repos: RepoPicker::default(),
             policy: PolicyTab::default(),
             feed: FeedTab::default(),
@@ -575,6 +579,14 @@ impl App {
         if self.screen == Screen::Login && self.token_input.is_some() {
             return self.on_token_key(key);
         }
+        if std::mem::take(&mut self.confirm_sign_out) {
+            return if key.code == KeyCode::Char('y') {
+                self.notice = Some("Signing out of GitHub…".into());
+                vec![Cmd::SignOut]
+            } else {
+                vec![]
+            };
+        }
         if self.screen == Screen::Main {
             match self.tab {
                 Tab::Policy if self.policy.captures_keys() => return self.policy.on_key(key),
@@ -672,6 +684,10 @@ impl App {
             KeyCode::Esc => {
                 self.token_input = None;
                 self.login_error = None;
+                // Switching account from Settings: back to where you were.
+                if matches!(self.auth, Some(AuthState::Connected { .. })) {
+                    self.screen = Screen::Main;
+                }
             }
             KeyCode::Backspace => {
                 token.pop();
@@ -721,7 +737,19 @@ impl App {
             Tab::History => self.history.on_key(key),
             Tab::Reviews => self.reviews.on_key(key),
             Tab::Queue => self.queue.on_key(key),
-            Tab::Settings => self.settings.on_key(key),
+            Tab::Settings => match key.code {
+                KeyCode::Char('l') => {
+                    self.confirm_sign_out = true;
+                    vec![]
+                }
+                KeyCode::Char('t') => {
+                    self.screen = Screen::Login;
+                    self.login_error = None;
+                    self.token_input = Some(String::new());
+                    vec![]
+                }
+                _ => self.settings.on_key(key),
+            },
         }
     }
 
@@ -1146,6 +1174,60 @@ mod tests {
             app.notice.as_deref(),
             Some("Deleted the override for acme/api."),
             "the delete's confirmation stays"
+        );
+    }
+
+    fn connected_on_settings() -> App {
+        let mut app = App::new("sock");
+        app.update(Msg::Auth(Ok(AuthState::Connected {
+            login: "octo".into(),
+            name: None,
+        })));
+        app.screen = Screen::Main;
+        app.tab = Tab::Settings;
+        app
+    }
+
+    #[test]
+    fn signing_out_from_settings_asks_first() {
+        let mut app = connected_on_settings();
+        assert!(app.update(key(KeyCode::Char('l'))).is_empty());
+        assert!(app.confirm_sign_out);
+        assert!(
+            app.update(key(KeyCode::Char('n'))).is_empty(),
+            "anything else cancels"
+        );
+        assert!(!app.confirm_sign_out);
+
+        app.update(key(KeyCode::Char('l')));
+        assert_eq!(app.update(key(KeyCode::Char('y'))), [Cmd::SignOut]);
+        app.update(Msg::Auth(Ok(AuthState::Disconnected)));
+        assert_eq!(app.screen, Screen::Login);
+    }
+
+    #[test]
+    fn a_token_can_replace_the_current_sign_in_from_settings() {
+        let mut app = connected_on_settings();
+        app.update(key(KeyCode::Char('t')));
+        assert_eq!(app.screen, Screen::Login);
+        assert!(app.token_input.is_some());
+        app.update(key(KeyCode::Esc));
+        assert_eq!(
+            app.screen,
+            Screen::Main,
+            "esc goes back while still signed in"
+        );
+        assert_eq!(app.tab, Tab::Settings);
+
+        app.update(key(KeyCode::Char('t')));
+        for c in "ghp_new".chars() {
+            app.update(key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            app.update(key(KeyCode::Enter)),
+            [Cmd::SignInWithToken {
+                token: "ghp_new".into()
+            }]
         );
     }
 

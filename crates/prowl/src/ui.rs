@@ -138,6 +138,9 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
         let mut lines = vec![
             Line::from("Paste a personal access token with the repo and read:org scopes."),
             Line::from("PRowl checks it with GitHub, then keeps it in your OS keychain."),
+            Line::from("Create a classic one at https://github.com/settings/tokens/new").dim(),
+            Line::from("If an organisation uses SSO: Configure SSO → Authorize next to the token.")
+                .dim(),
             Line::from(""),
             Line::from(vec![
                 "token: ".bold(),
@@ -207,6 +210,8 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
                 "PRowl reviews pull requests where you're a requested reviewer.",
             ));
             lines.push(Line::from(""));
+            lines.extend(org_access_lines());
+            lines.push(Line::from(""));
             lines.push(Line::from(vec![
                 crate::theme::key("[enter] "),
                 "connect with a one-time code  ".into(),
@@ -218,6 +223,28 @@ fn login(app: &App, frame: &mut Frame, area: Rect) {
             centered(frame, area, "Connect your GitHub account", lines);
         }
     }
+}
+
+/// Why organisation repos can be missing, and the way around it.
+fn org_access_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from("Organisation repos missing? Each organisation must approve PRowl:").bold(),
+        Line::from(
+            "Grant (owners) or Request it at https://github.com/settings/connections/applications",
+        ),
+        Line::from("If an org owner won't approve it, sign in with a personal access token instead.")
+            .dim(),
+        Line::from("It acts as you, so the org doesn't need to approve an app:").dim(),
+        Line::from(
+            "create a classic token at https://github.com/settings/tokens/new with repo and read:org,",
+        )
+        .dim(),
+        Line::from("authorize it for SSO if the org uses SSO (Configure SSO → Authorize),").dim(),
+        Line::from(
+            "then press [t] here and paste it (signed in already? Settings tab → [t])",
+        )
+        .dim(),
+    ]
 }
 
 fn policy_setup(frame: &mut Frame, area: Rect) {
@@ -374,7 +401,13 @@ fn main_screen(app: &App, frame: &mut Frame, area: Rect) {
         Tab::Policy => crate::policy_ui::draw(&app.policy, frame, inner),
         Tab::Feed => crate::feed_ui::draw_feed(&app.feed, frame, inner),
         Tab::Queue => crate::queue_ui::draw(&app.queue, frame, inner),
-        Tab::Settings => crate::settings_ui::draw(&app.settings, frame, inner),
+        Tab::Settings => crate::settings_ui::draw(
+            &app.settings,
+            app.status.account.as_deref(),
+            app.confirm_sign_out,
+            frame,
+            inner,
+        ),
         Tab::History => crate::feed_ui::draw_history(&app.history, &app.status, frame, inner),
         Tab::Reviews => crate::reviews_ui::draw(&app.reviews, frame, inner),
     }
@@ -525,6 +558,7 @@ pub fn help_lines() -> Vec<Line<'static>> {
         row("/ space", "search · watch / unwatch"),
         heading("7 Settings"),
         row("enter a x", "change · add file rule · remove file rule"),
+        row("t l", "sign in with a token · sign out of GitHub"),
         Line::from(""),
         heading("Update PRowl (rerun the installer)"),
         Line::from(format!("   {UPDATE_COMMAND}")).dim(),
