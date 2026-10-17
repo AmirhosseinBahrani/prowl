@@ -594,7 +594,32 @@ fn reason_line(reason: &Reason) -> String {
         Reason::RiskScore { score, threshold } => {
             format!("Risk score **{score}** (threshold {threshold})")
         }
+        Reason::PromptInjection { location, excerpt } => format!(
+            "**Possible prompt injection** in {location}: `{}` — text that tries to steer the AI \
+             reviewer, so its review can't stand on its own",
+            quote(excerpt)
+        ),
+        Reason::HiddenCharacters { location, count } => format!(
+            "**{count} hidden or reordering Unicode character(s)** in {location} — the code may \
+             not do what it appears to"
+        ),
+        Reason::SecretRedacted { count } => format!(
+            "The agent's review contained {count} credential-like string(s); they were removed \
+             before posting"
+        ),
     }
+}
+
+/// Attacker-written text, made safe to show inside an inline code span: one line, no
+/// backticks or control characters, bounded.
+fn quote(text: &str) -> String {
+    text.chars()
+        .map(|c| if c == '`' { '\'' } else { c })
+        .filter(|c| !c.is_control())
+        .take(160)
+        .collect::<String>()
+        .trim()
+        .to_owned()
 }
 
 pub(crate) fn agent_only_body(
@@ -713,6 +738,11 @@ pub(crate) fn describe(decision: Decision, reasons: &[Reason]) -> String {
             ),
             Reason::RiskScore { score, threshold } => format!("risk {score} ≥ {threshold}"),
             Reason::FilePattern { pattern, .. } => format!("file rule {pattern}"),
+            Reason::PromptInjection { location, .. } => {
+                format!("possible prompt injection in {location}")
+            }
+            Reason::HiddenCharacters { location, .. } => format!("hidden characters in {location}"),
+            Reason::SecretRedacted { .. } => "credentials removed from the review".to_owned(),
             Reason::TooLarge {
                 changed_lines,
                 changed_files,

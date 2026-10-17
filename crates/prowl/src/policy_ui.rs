@@ -253,6 +253,15 @@ pub fn reason_text(reason: &Reason) -> String {
         } => {
             format!("too large for the agent ({changed_lines} lines, {changed_files} files)")
         }
+        Reason::PromptInjection { location, excerpt } => {
+            format!("possible prompt injection in {location}: \"{excerpt}\"")
+        }
+        Reason::HiddenCharacters { location, count } => {
+            format!("{count} hidden/reordering character(s) in {location}")
+        }
+        Reason::SecretRedacted { count } => {
+            format!("{count} credential(s) removed from the agent's review before posting")
+        }
     }
 }
 

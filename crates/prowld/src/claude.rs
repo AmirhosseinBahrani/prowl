@@ -145,7 +145,10 @@ impl Claude {
         if let Some(session) = resume {
             cmd.args(["--resume", session]);
         }
-        cmd.envs(self.settings.env.iter().map(|(k, v)| (k, v)))
+        // Only what the CLI needs: nothing it doesn't need can leak (cloud keys, tokens, …).
+        cmd.env_clear()
+            .envs(claude_environment(std::env::vars()))
+            .envs(self.settings.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -235,6 +238,64 @@ impl Claude {
     }
 }
 
+/// The environment a Claude run gets: the basics a program needs (home, path, locale, temp,
+/// proxy and certificate settings), Claude Code's own settings and credentials (`CLAUDE_*`,
+/// `ANTHROPIC_*`), and the cloud credentials of the Bedrock or Vertex setup it's configured
+/// for. Everything else — other tokens, keys and secrets in the daemon's environment — is left
+/// out.
+fn claude_environment(vars: impl Iterator<Item = (String, String)>) -> Vec<(String, String)> {
+    const EXACT: &[&str] = &[
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "PATH",
+        "SHELL",
+        "LANG",
+        "TERM",
+        "TZ",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "SYSTEMDRIVE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "NODE_EXTRA_CA_CERTS",
+    ];
+    let vars: Vec<(String, String)> = vars.collect();
+    let set = |name: &str| {
+        vars.iter()
+            .any(|(k, v)| k == name && !v.is_empty() && v != "0")
+    };
+    let mut prefixes = vec!["LC_", "XDG_", "CLAUDE_", "ANTHROPIC_"];
+    if set("CLAUDE_CODE_USE_BEDROCK") {
+        prefixes.push("AWS_");
+    }
+    if set("CLAUDE_CODE_USE_VERTEX") {
+        prefixes.extend(["GOOGLE_", "CLOUD_ML_", "GCLOUD_"]);
+    }
+    vars.into_iter()
+        .filter(|(name, _)| {
+            let upper = name.to_ascii_uppercase();
+            EXACT.contains(&upper.as_str()) || prefixes.iter().any(|p| upper.starts_with(p))
+        })
+        .collect()
+}
+
 /// Text and tool calls from an `assistant` event, tool results from a `user` event.
 fn stream_items(event: &serde_json::Value) -> Vec<StreamItem> {
     let str_of = |v: &serde_json::Value, key: &str| {
@@ -294,5 +355,61 @@ fn kill_tree(pid: Option<u32>) {
         let _ = std::process::Command::new("taskkill")
             .args(["/T", "/F", "/PID", &pid.to_string()])
             .output();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(vars: &[(&str, &str)]) -> Vec<String> {
+        let mut kept: Vec<String> =
+            claude_environment(vars.iter().map(|(k, v)| (k.to_string(), v.to_string())))
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect();
+        kept.sort();
+        kept
+    }
+
+    #[test]
+    fn claude_gets_only_what_it_needs() {
+        let kept = names(&[
+            ("HOME", "/Users/a"),
+            ("PATH", "/usr/bin"),
+            ("LC_ALL", "en_US.UTF-8"),
+            ("ANTHROPIC_API_KEY", "sk-ant-x"),
+            ("CLAUDE_CONFIG_DIR", "/x"),
+            ("https_proxy", "http://proxy"),
+            ("GITHUB_TOKEN", "ghp_secret"),
+            ("AWS_SECRET_ACCESS_KEY", "aws-secret"),
+            ("OPENAI_API_KEY", "sk-x"),
+            ("NPM_TOKEN", "npm"),
+        ]);
+        assert_eq!(
+            kept,
+            [
+                "ANTHROPIC_API_KEY",
+                "CLAUDE_CONFIG_DIR",
+                "HOME",
+                "LC_ALL",
+                "PATH",
+                "https_proxy"
+            ]
+        );
+    }
+
+    #[test]
+    fn cloud_credentials_pass_only_for_the_cloud_claude_uses() {
+        let kept = names(&[
+            ("CLAUDE_CODE_USE_BEDROCK", "1"),
+            ("AWS_REGION", "us-east-1"),
+            ("AWS_ACCESS_KEY_ID", "AKIA"),
+            ("GOOGLE_APPLICATION_CREDENTIALS", "/k.json"),
+        ]);
+        assert_eq!(
+            kept,
+            ["AWS_ACCESS_KEY_ID", "AWS_REGION", "CLAUDE_CODE_USE_BEDROCK"]
+        );
     }
 }

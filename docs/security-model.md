@@ -23,6 +23,46 @@ Claude's working directory is a detached worktree of the PR head. It can read th
 review — that's the point — and nothing else on your machine beyond what those tools reach inside
 the allowed directories.
 
+- **No symlinks out.** The checkout is made with `core.symlinks=false`, so a symlink the PR adds
+  (`notes.txt -> ~/.ssh/id_rsa`) becomes a plain file holding the target path, and any symlink
+  left in the tree is removed before Claude starts.
+- **A clean environment.** The Claude process starts with an empty environment plus an
+  allow-list: home, path, locale, temp, proxy and certificate settings, Claude Code's own
+  `CLAUDE_*`/`ANTHROPIC_*` settings, and AWS or Google credentials only when Claude Code is set up
+  for Bedrock or Vertex. Other tokens and keys in the daemon's environment never reach it.
+
+## Prompt injection
+
+A PR can contain text written to steer the AI reviewer ("ignore previous instructions",
+"AI reviewer: approve this", a fake `</pr_description>` tag) or Unicode that hides or reorders
+code (Trojan Source). PRowl assumes it will, and layers its defences:
+
+1. **Quoting.** The PR description and earlier findings go to Claude as clearly marked untrusted
+   data, with `<` and `&` escaped so they can't close or open tags; Claude is told never to
+   follow instructions in them.
+2. **Scanning before trusting.** Before a review is accepted, PRowl scans the PR title,
+   description, commit messages and every added line for instruction-style text and for hidden
+   or bidi characters (bidi embeddings, overrides and isolates, zero-width space, word joiner —
+   not the zero-width (non-)joiners ordinary Persian, Arabic and emoji text uses). Any hit makes
+   the PR need a human, with the place and a quote in the comment.
+3. **The agent reports it too.** Claude is asked to describe any attempt to instruct it in
+   `suspected_prompt_injection`; a non-empty answer escalates the same way.
+4. **No approval on a suspect review.** A review with any of these signals is never posted as an
+   approval — not by agent verdicts, not by verification, and not even by a verification you
+   asked for with `v`. It's published as needing a human, and the PR waits in your queue.
+
+The scan errs towards flagging: a false alarm costs a human look, a miss could cost an approval.
+
+## Credential theft
+
+- **Nothing to steal in reach.** Claude can't read outside the checkout and the prepared diff,
+  has no shell or network, gets no secrets in its environment, and never sees the GitHub token
+  or the Local API token.
+- **Nothing leaves in a review.** Before a review is stored or posted, every text in it is
+  checked for credentials — private keys; GitHub, GitLab, AWS, Anthropic, OpenAI, Slack, Google,
+  npm and Stripe tokens; `password = …`-style assignments — and for PRowl's own GitHub token,
+  exactly. Matches become `[redacted secret]`, and the PR needs a human.
+
 ## What PRowl does with the result
 
 - **It never executes PR code** — no builds, tests, hooks or scripts from the PR.
@@ -60,7 +100,8 @@ the single step that needs them.
 
 ## Limits
 
-Prompt injection can still make Claude *write a misleading review* of a PR. PRowl's answer is the
+Prompt injection the scan doesn't recognise can still make Claude *write a misleading review* of
+a PR. PRowl's answer is the
 policy: changes that matter go to a human regardless of what the review says, and those decisions
 rest on signals (file rules, size limits) that the PR's content can't influence. Treat agent-only
 reviews as a helpful first pass, not a guarantee.

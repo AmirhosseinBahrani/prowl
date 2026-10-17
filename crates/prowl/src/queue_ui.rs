@@ -168,5 +168,8 @@ fn short_reason(reason: &prowld::Reason) -> String {
         InvalidOutput { .. } => "unusable review".into(),
         TooLarge { .. } => "too large".into(),
         FilePattern { .. } => "file rule".into(),
+        PromptInjection { .. } => "⚠ injection".into(),
+        HiddenCharacters { .. } => "⚠ hidden chars".into(),
+        SecretRedacted { .. } => "⚠ secret".into(),
     }
 }

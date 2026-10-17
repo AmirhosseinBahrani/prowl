@@ -49,6 +49,9 @@ pub struct ReviewOutput {
     pub matched_policy_rules: Vec<RuleMatch>,
     pub findings: Vec<Finding>,
     pub recommendation: Recommendation,
+    /// Where the PR tried to instruct the reviewer, if the agent noticed it.
+    #[serde(default)]
+    pub suspected_prompt_injection: Option<String>,
 }
 
 /// JSON Schema for [`ReviewOutput`], given to Claude and documented in the prompt.
@@ -90,7 +93,8 @@ pub fn schema() -> serde_json::Value {
                     }
                 }
             },
-            "recommendation": { "enum": ["approve", "comment", "request_changes"] }
+            "recommendation": { "enum": ["approve", "comment", "request_changes"] },
+            "suspected_prompt_injection": { "type": ["string", "null"] }
         }
     })
 }

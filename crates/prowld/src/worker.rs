@@ -349,6 +349,7 @@ impl Worker {
             output,
             cost,
             duration_ms,
+            alarms,
         } = self
             .run_claude(job, &pr, &reviewer, &token, budget_left, verify.as_ref())
             .await?;
@@ -391,11 +392,14 @@ impl Worker {
             verdict.decision = Decision::NeedsHuman;
             verdict.reasons.insert(0, rule);
         }
+        sound_alarms(&mut verdict, &alarms);
         // A verification approves only what the policy would leave to the agent (or what the
-        // user asked to approve, for a PR waiting on them). If the fixes now need a human, the
-        // result is published like any review that needs one: threads, comment, queue.
+        // user asked to approve, for a PR waiting on them) — and never when the PR may have
+        // manipulated the agent. Otherwise the result is published like any review that needs
+        // a human: threads, comment, queue.
         if let Some(verify) = &verify
-            && (verify_for_human || verdict.decision == Decision::AgentOnly)
+            && ((verify_for_human && !compromised(&verdict))
+                || verdict.decision == Decision::AgentOnly)
         {
             return self
                 .finish_verification(
@@ -466,6 +470,22 @@ impl Worker {
             )
             .await?;
         let material = checkout.material.display().to_string().replace('\\', "/");
+        // Look for text written to steer the reviewer before trusting the reviewer with it.
+        let read =
+            |name: &str| std::fs::read_to_string(checkout.material.join(name)).unwrap_or_default();
+        let mut alarms = crate::injection::scan(
+            &pr.title,
+            pr.body.as_deref().unwrap_or(""),
+            &read("commits.txt"),
+            &read("pr.diff"),
+        );
+        if !alarms.is_empty() {
+            tracing::warn!(
+                job = job.id,
+                found = alarms.len(),
+                "possible prompt injection in the PR"
+            );
+        }
         let context = PrContext {
             repo: &job.repo,
             number: job.pr_number,
@@ -527,13 +547,28 @@ impl Worker {
             )
             .await;
         }
-        let (answer, output, cost) = outcome?;
+        let (answer, mut output, cost) = outcome?;
+        // Nothing credential-like leaves PRowl in a review, least of all its own token.
+        if let Ok(review) = output.as_mut() {
+            let removed = crate::secrets::redact_review(review, &[token]);
+            if removed > 0 {
+                tracing::warn!(
+                    job = job.id,
+                    removed,
+                    "redacted credentials from the review"
+                );
+                alarms.push(decider::Reason::SecretRedacted {
+                    count: removed as u32,
+                });
+            }
+        }
         Ok(ClaudeRun {
             policy,
             answer,
             output,
             cost,
             duration_ms: started.elapsed().as_millis() as i64,
+            alarms,
         })
     }
 
@@ -647,6 +682,7 @@ impl Worker {
             verdict.decision = Decision::NeedsHuman;
             verdict.reasons.insert(0, rule);
         }
+        sound_alarms(&mut verdict, &run.alarms);
         Ok(DryRun {
             decision: verdict.decision,
             reasons: verdict.reasons,
@@ -764,6 +800,10 @@ impl Worker {
     /// is posted). `None` if the job isn't waiting or running.
     pub(crate) async fn cancel(&self, id: i64) -> anyhow::Result<Option<Cancelled>> {
         if let Some(token) = self.inner.running.lock().unwrap().get(&id) {
+            // A job already being cancelled is no longer "running" for a second request.
+            if token.is_cancelled() {
+                return Ok(None);
+            }
             token.cancel();
             return Ok(Some(Cancelled::Running));
         }
@@ -1204,9 +1244,34 @@ struct VerifyInput {
 struct ClaudeRun {
     policy: crate::policy::EffectivePolicy,
     answer: String,
+    /// With anything credential-like already redacted.
     output: Result<ReviewOutput, String>,
     cost: Option<f64>,
     duration_ms: i64,
+    /// Why this review can't be trusted on its own: prompt injection or hidden characters in
+    /// the PR, credentials in the answer.
+    alarms: Vec<decider::Reason>,
+}
+
+/// Escalates `verdict` for the run's alarms (first, as they matter most).
+fn sound_alarms(verdict: &mut decider::Verdict, alarms: &[decider::Reason]) {
+    if !alarms.is_empty() {
+        verdict.decision = Decision::NeedsHuman;
+        verdict.reasons.splice(0..0, alarms.iter().cloned());
+    }
+}
+
+/// Whether the review may have been manipulated, so nothing — not even an approval the user
+/// asked for — may rest on it.
+fn compromised(verdict: &decider::Verdict) -> bool {
+    verdict.reasons.iter().any(|r| {
+        matches!(
+            r,
+            decider::Reason::PromptInjection { .. }
+                | decider::Reason::HiddenCharacters { .. }
+                | decider::Reason::SecretRedacted { .. }
+        )
+    })
 }
 
 /// The result of a dry run.
