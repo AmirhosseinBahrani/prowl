@@ -12,6 +12,7 @@ All notable changes to PRowl are documented here. The format is based on
   default): on PRs that don't need a human, the agent's review approves or requests changes as
   Claude recommends, instead of only commenting. If a newer commit needs a human, PRowl
   dismisses its earlier approval.
+- `←` and `→` switch between tabs in the TUI, alongside `1`–`6` and `Tab` / `Shift+Tab`.
 
 ### Changed
 

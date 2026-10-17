@@ -643,8 +643,10 @@ impl App {
 
     fn on_main_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
         let next = match key.code {
-            KeyCode::Tab => Some((self.tab.index() + 1) % Tab::ALL.len()),
-            KeyCode::BackTab => Some((self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len()),
+            KeyCode::Tab | KeyCode::Right => Some((self.tab.index() + 1) % Tab::ALL.len()),
+            KeyCode::BackTab | KeyCode::Left => {
+                Some((self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len())
+            }
             KeyCode::Char(c @ '1'..='6') => Some(c as usize - '1' as usize),
             _ => None,
         };
@@ -1043,6 +1045,39 @@ mod tests {
             matches!(&cmds[..], [Cmd::LoadRepos { .. }]),
             "repos load on first visit"
         );
+    }
+
+    #[test]
+    fn arrow_keys_switch_tabs_and_wrap() {
+        let mut app = App::new("sock");
+        app.screen = Screen::Main;
+        assert_eq!(app.update(key(KeyCode::Right)), [Cmd::LoadRecentEvents]);
+        assert_eq!(app.tab, Tab::Feed);
+        app.update(key(KeyCode::Left));
+        app.update(key(KeyCode::Left));
+        assert_eq!(
+            app.tab,
+            Tab::Settings,
+            "left from the first tab wraps to the last"
+        );
+        app.update(key(KeyCode::Right));
+        assert_eq!(
+            app.tab,
+            Tab::Queue,
+            "right from the last tab wraps to the first"
+        );
+    }
+
+    #[test]
+    fn arrow_keys_stay_in_a_text_field() {
+        let mut app = App::new("sock");
+        app.screen = Screen::Main;
+        app.tab = Tab::Policy;
+        app.update(key(KeyCode::Char('n')));
+        app.update(key(KeyCode::Right));
+        app.update(key(KeyCode::Left));
+        assert_eq!(app.tab, Tab::Policy);
+        assert!(app.policy.input.is_some());
     }
 
     fn healthy() -> Doctor {
