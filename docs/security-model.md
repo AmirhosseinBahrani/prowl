@@ -53,6 +53,14 @@ code (Trojan Source). PRowl assumes it will, and layers its defences:
 
 The scan errs towards flagging: a false alarm costs a human look, a miss could cost an approval.
 
+### Policy learning
+
+With policy learning on, comments can change a repository's policy — so only collaborators'
+comments count, injection-like comments are dropped, the comments reach Claude as untrusted
+data, a policy without rules is refused, changes stay within that repository's override, and
+every learned version is listed and revertible. Turn it off (the default) if you don't want
+reviewers' comments to shape what needs a human.
+
 ## Credential theft
 
 - **Nothing to steal in reach.** Claude can't read outside the checkout and the prepared diff,

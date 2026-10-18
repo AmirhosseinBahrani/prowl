@@ -215,6 +215,9 @@ pub(crate) struct SubmittedReview {
     pub state: String,
     #[serde(default)]
     pub submitted_at: Option<String>,
+    /// GitHub's author association (OWNER, MEMBER, COLLABORATOR, …).
+    #[serde(default)]
+    pub author_association: Option<String>,
 }
 
 /// A comment on a PR's conversation.
@@ -259,12 +262,20 @@ pub struct ReviewThread {
     /// Every comment in the thread, the opening one first (up to 50).
     #[serde(default)]
     pub comments: Vec<ThreadComment>,
+    /// Who resolved it, if it is resolved.
+    #[serde(default)]
+    pub resolved_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadComment {
     pub author: String,
     pub body: String,
+    /// GitHub's `authorAssociation`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, …
+    #[serde(default)]
+    pub association: String,
+    #[serde(default)]
+    pub created_at: String,
 }
 
 /// A published release.
@@ -750,8 +761,8 @@ impl GitHub {
               reviewThreads(first: 100, after: $after) {
                 pageInfo { hasNextPage endCursor }
                 nodes {
-                  isResolved isOutdated path line
-                  comments(first: 50) { nodes { author { login } body } }
+                  isResolved isOutdated path line resolvedBy { login }
+                  comments(first: 50) { nodes { author { login } authorAssociation body createdAt } }
                 }
               }
             }
@@ -780,10 +791,16 @@ impl GitHub {
                     .map(|c| ThreadComment {
                         author: c["author"]["login"].as_str().unwrap_or("ghost").to_owned(),
                         body: c["body"].as_str().unwrap_or_default().to_owned(),
+                        association: c["authorAssociation"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                        created_at: c["createdAt"].as_str().unwrap_or_default().to_owned(),
                     })
                     .collect();
                 threads.push(ReviewThread {
                     comments,
+                    resolved_by: node["resolvedBy"]["login"].as_str().map(str::to_owned),
                     path: node["path"].as_str().unwrap_or_default().to_owned(),
                     line: node["line"].as_u64().map(|l| l as u32),
                     resolved: node["isResolved"].as_bool().unwrap_or(false),

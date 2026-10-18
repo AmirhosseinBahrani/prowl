@@ -6,6 +6,15 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Policy learning** (Settings → "Learn the policy from reviewers' comments", off by default; `L`
+  in the Policy tab runs it now): PRowl reads what collaborators say about its reviews — replies
+  to its threads, issues they raised that it missed, and how you resolved the PRs it sent you —
+  and applies the resulting changes to that repository's policy as a new, revertible `learned`
+  version. Only collaborators count, injection-like comments are dropped, and a policy without
+  rules is refused.
+
 ## [0.1.6] - 2026-10-17
 
 ### Added

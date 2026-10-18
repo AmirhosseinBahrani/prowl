@@ -107,6 +107,8 @@ impl Claude {
     /// Sends `prompt` (on stdin) and returns the final answer. `on_item` receives Claude's text,
     /// tool calls and tool results as they stream. `resume` continues an earlier session (used
     /// for repair requests).
+    /// `schema` is the JSON Schema the answer must match (a review, or a policy update).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run(
         &self,
         cwd: &Path,
@@ -114,6 +116,7 @@ impl Claude {
         prompt: &str,
         resume: Option<&str>,
         options: &RunOptions,
+        schema: &serde_json::Value,
         mut on_item: impl FnMut(StreamItem),
     ) -> Result<ClaudeAnswer, ClaudeError> {
         let bin = self.locate()?;
@@ -135,7 +138,7 @@ impl Claude {
             .arg("--add-dir")
             .arg(extra_dir)
             .arg("--json-schema")
-            .arg(crate::review::schema().to_string());
+            .arg(schema.to_string());
         if let Some(model) = &options.model {
             cmd.args(["--model", model]);
         }

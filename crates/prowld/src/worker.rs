@@ -1135,6 +1135,7 @@ impl Worker {
                 prompt,
                 resume,
                 &options,
+                &crate::review::schema(),
                 |item| {
                     let _ = tx.send(item);
                 },

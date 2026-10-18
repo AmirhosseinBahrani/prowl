@@ -64,6 +64,10 @@ pub struct Config {
     /// For PRs that don't need a human, post Claude's recommendation as the review's verdict
     /// (approve or request changes) instead of a plain comment.
     pub agent_verdicts: bool,
+    /// Rewrite each repository's policy from what reviewers say about PRowl's reviews.
+    pub policy_learning: bool,
+    /// How often to look for new feedback to learn from.
+    pub learning_interval: Duration,
     /// Replaces the OS notification service (tests).
     pub notifier: Option<crate::notify::NotifierHook>,
     /// When to keep the machine awake; `None` picks `ac_only` with a battery, else `always`.
@@ -115,6 +119,8 @@ impl Config {
             max_changed_files: 350,
             notifications: true,
             agent_verdicts: false,
+            policy_learning: false,
+            learning_interval: Duration::from_secs(6 * 3600),
             notifier: None,
             sleep_mode: None,
             power: None,

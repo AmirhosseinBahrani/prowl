@@ -45,6 +45,9 @@ pub struct Settings {
     /// Approve or request changes on PRs that don't need a human, as Claude recommends.
     #[serde(default)]
     pub agent_verdicts: bool,
+    /// Learn each repository's policy from reviewers' comments, applying the changes.
+    #[serde(default)]
+    pub policy_learning: bool,
     /// Per repository (`owner/repo`), glob patterns of files that always need a human.
     pub file_rules: BTreeMap<String, Vec<String>>,
 }
@@ -67,6 +70,7 @@ impl Settings {
             include_team_requests: config.include_team_requests,
             notifications: config.notifications,
             agent_verdicts: config.agent_verdicts,
+            policy_learning: config.policy_learning,
             file_rules: BTreeMap::new(),
         }
     }

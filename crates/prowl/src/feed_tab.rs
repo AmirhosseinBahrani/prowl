@@ -272,6 +272,23 @@ pub fn describe(event: &Event) -> (Tone, String) {
                     .unwrap_or(0.0)
             ),
         ),
+        "policy.learned" => (
+            Warn,
+            format!(
+                "learned from {} comment(s): {} — new policy version v{}",
+                n("signals"),
+                p.get("changes")
+                    .and_then(|c| c.as_array())
+                    .map(|c| {
+                        c.iter()
+                            .filter_map(|x| x.get("summary").and_then(|s| s.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    })
+                    .unwrap_or_default(),
+                n("version_id")
+            ),
+        ),
         "policy.changed" => (
             Normal,
             format!(

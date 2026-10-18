@@ -200,6 +200,10 @@ impl PolicyTab {
                 });
                 vec![]
             }
+            // Learn from reviewers' comments: this repository's, or every watched one's.
+            KeyCode::Char('L') => vec![Cmd::LearnPolicy {
+                repo: self.selected_scope().filter(|s| s != "global"),
+            }],
             KeyCode::Char('x') => {
                 if let Some(scope) = self.selected_scope().filter(|s| s != "global") {
                     self.confirm = Some(Confirm::Delete { scope });
