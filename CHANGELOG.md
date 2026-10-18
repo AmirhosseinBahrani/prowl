@@ -6,6 +6,8 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-10-18
+
 ### Added
 
 - **Policy learning** (Settings → "Learn the policy from reviewers' comments", off by default; `L`
@@ -170,7 +172,8 @@ First public version.
 - One-line installers (`install.sh`, `install.ps1`) that verify checksums, install into your home
   directory with versioned upgrades, and start the background service.
 
-[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.3...v0.1.4
