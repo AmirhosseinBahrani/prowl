@@ -1,6 +1,8 @@
 //! Installs `prowld-service` as a per-user background service that starts at login and is
-//! restarted if it dies: a launchd agent (macOS), a systemd user unit (Linux) or a Task
-//! Scheduler logon task (Windows).
+//! restarted if it crashes: a launchd agent (macOS), a systemd user unit (Linux) or a Task
+//! Scheduler logon task (Windows). A clean quit — SIGTERM, as Activity Monitor's "Quit" or
+//! `kill` sends — stops it until the next login or `prowld service start`; a `kill -9` (Force
+//! Quit) can't be told from a crash, so that is restarted.
 //!
 //! It runs as the logged-in user rather than as a system service, because the `claude` CLI
 //! login and the GitHub token belong to that user.
@@ -153,7 +155,10 @@ pub fn launchd_plist(spec: &ServiceSpec) -> String {
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>ThrottleInterval</key>
     <integer>10</integer>
     <key>ProcessType</key>
@@ -186,7 +191,7 @@ After=network-online.target
 [Service]
 Type=simple
 ExecStart={exe} --home {home}
-{env}Restart=always
+{env}Restart=on-failure
 RestartSec=5
 
 [Install]
@@ -366,6 +371,11 @@ mod imp {
     pub fn start(spec: &ServiceSpec) -> anyhow::Result<()> {
         let domain = domain()?;
         let path = plist_path(spec)?;
+        let target = format!("{domain}/{}", spec.label());
+        // After a clean quit the job stays loaded, just not running: start it in place.
+        if run(Command::new("launchctl").arg("print").arg(&target)).is_ok() {
+            return run(Command::new("launchctl").arg("kickstart").arg(&target)).map(drop);
+        }
         retry(5, std::time::Duration::from_millis(500), || {
             run(Command::new("launchctl")
                 .arg("bootstrap")
@@ -597,7 +607,10 @@ mod tests {
     fn launchd_agent_restarts_and_runs_at_login() {
         let plist = launchd_plist(&spec());
         assert!(plist.contains("<string>dev.prowl.prowld</string>"));
-        assert!(plist.contains("<key>KeepAlive</key>\n    <true/>"));
+        // Restarted after a crash (or `kill -9`), not after a clean quit.
+        assert!(plist.contains(
+            "<key>KeepAlive</key>\n    <dict>\n        <key>SuccessfulExit</key>\n        <false/>"
+        ));
         assert!(plist.contains("<key>RunAtLoad</key>\n    <true/>"));
         assert!(plist.contains("<string>/opt/Pr Owl/prowld-service</string>"));
         assert!(plist.contains("<string>--home</string>"));
@@ -610,7 +623,7 @@ mod tests {
     #[test]
     fn systemd_unit_restarts_always_and_quotes_paths() {
         let unit = systemd_unit(&spec());
-        assert!(unit.contains("Restart=always"));
+        assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("WantedBy=default.target"));
         assert!(unit.contains(
             r#"ExecStart="/opt/Pr Owl/prowld-service" --home "/Users/a&b/Library/Application Support/dev.prowl.prowl""#
