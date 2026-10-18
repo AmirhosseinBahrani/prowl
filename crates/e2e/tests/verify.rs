@@ -194,11 +194,19 @@ async fn without_agent_verdicts_nothing_is_verified_on_its_own() {
         .route(Method::POST, "/graphql", StatusCode::OK, threads(true));
     h.client().poll_now().await.unwrap();
     wait_for_job(&h, finished("done")).await;
+    let thread_checks = || {
+        h.github
+            .requests_to(Method::POST, "/graphql")
+            .iter()
+            .filter(|r| r.raw_body.contains("reviewThreads"))
+            .count()
+    };
+    let before = thread_checks();
 
     h.client().poll_now().await.unwrap();
 
     assert_eq!(h.client().jobs().await.unwrap().len(), 1);
-    assert!(h.github.requests_to(Method::POST, "/graphql").is_empty());
+    assert_eq!(thread_checks(), before, "no thread states polled");
     h.shutdown().await.unwrap();
 }
 

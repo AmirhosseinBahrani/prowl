@@ -7,7 +7,7 @@ mod fake_power;
 mod git_remote;
 
 pub use fake_claude::{ClaudeInvocation, ClaudeResponse, FakeClaude};
-pub use fake_github::{FakeGitHub, RecordedRequest};
+pub use fake_github::{FakeGitHub, RecordedRequest, empty_pull_request};
 pub use fake_power::{FakeNotifier, FakePower};
 pub use git_remote::{GitRemote, PrCommits};
 

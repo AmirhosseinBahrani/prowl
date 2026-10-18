@@ -33,19 +33,24 @@ PRowl is a Rust workspace with three crates:
   and pauses when GitHub says the limit is exhausted.
 - **Gate** — a pure function that decides whether a PR should be reviewed: open, not a draft
   (unless configured), not authored by you, you (or your team, if enabled) actually requested,
-  and this head commit not reviewed yet. Claude is never involved before the gate passes.
+  and this head commit not reviewed yet. Claude is never involved before the gate passes. A PR
+  whose commit was reviewed already is queued again (as a `rerun`) when GitHub's timeline shows
+  your review requested after PRowl's last run of it — the author re-requesting it.
 - **Jobs** — one job per *(repository, PR, head commit)*. A new push queues a new job; the old
   one is superseded. Jobs survive restarts; a crashed daemon picks up where it left off.
 - **Worker** — runs up to `review_concurrency` jobs. For each: checks size limits and the daily
   budget, updates a bare clone, creates a detached worktree at the PR head, writes the diff and
-  commit list *outside* the worktree, runs Claude, and validates its JSON answer against a schema
+  commit list *outside* the worktree, loads the PR's review threads and conversation (untrusted,
+  injection-filtered) into the prompt, runs Claude, and validates its JSON answer against a schema
   (with one repair attempt). Failures retry with exponential backoff.
 - **Decider** — combines Claude's answer with the policy, thresholds and file rules into
   *agent only* or *needs a human*, plus the reasons. Escalation only.
 - **Publisher** — posts the result to GitHub exactly once (a review with inline notes — a comment,
   or an approval / change request with agent verdicts on — or the findings as review threads plus a "waiting for human approval"
   comment) and sets the `prowl:agent-reviewed` or `prowl:needs-human` label. Re-reviews of a new
-  commit update PRowl's earlier comment instead of adding more.
+  commit update PRowl's earlier comment instead of adding more. A finding an existing thread
+  already raises (Claude flags it, or a thread near the same line opens with its title) isn't
+  posted again; a verification only skips open threads, so what was resolved unfixed comes back.
 - **Verification** — after each poll (with agent verdicts on), PRowl asks GitHub's GraphQL API
   whether the threads it opened on agent-only PRs are resolved. When they all are, it queues a
   `verify` job: Claude gets the earlier findings and their thread states, checks the current

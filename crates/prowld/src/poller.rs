@@ -98,9 +98,13 @@ struct Inner {
     /// Last gate decision per PR, so a PR that stays gated out is reported once, not every poll.
     reported: Mutex<HashMap<(String, u64), (String, GateReason)>>,
     rate_limit_reported: Mutex<Option<u64>>,
+    /// A review request this close after PRowl's last run is the one that run answered:
+    /// clocks differ.
+    rerequest_margin: std::time::Duration,
 }
 
 impl Poller {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         github: GitHub,
         auth: Auth,
@@ -109,6 +113,7 @@ impl Poller {
         events: EventBus,
         queue: Queue,
         settings: SettingsStore,
+        rerequest_margin: std::time::Duration,
     ) -> Self {
         Self {
             inner: Arc::new(Inner {
@@ -122,6 +127,7 @@ impl Poller {
                 running: Mutex::new(()),
                 reported: Mutex::default(),
                 rate_limit_reported: Mutex::default(),
+                rerequest_margin,
             }),
         }
     }
@@ -343,14 +349,85 @@ impl Poller {
                     .remove(&(found.repo.clone(), pr.number));
                 Ok(id.is_some())
             }
-            // Already queued is the steady state for a PR waiting on its review; not news.
-            GateOutcome::Skip(GateReason::AlreadyQueued) => Ok(false),
+            // Already queued is the steady state for a PR waiting on its review; not news —
+            // unless the review was requested again since.
+            GateOutcome::Skip(GateReason::AlreadyQueued) => {
+                self.requested_again(token, me, my_teams, &found.repo, &pr)
+                    .await
+            }
             GateOutcome::Skip(reason) => {
                 self.report_gated(&found.repo, pr.number, &pr.head.sha, reason)
                     .await;
                 Ok(false)
             }
         }
+    }
+
+    /// Reviews the pull request again when its review was requested again after PRowl's last
+    /// run (the author re-requesting it after answering or fixing the threads), even without
+    /// a new commit. The new run sees the threads and comments as they are now. Returns
+    /// whether a job was queued.
+    async fn requested_again(
+        &self,
+        token: &str,
+        me: &str,
+        my_teams: &[(String, String)],
+        repo: &str,
+        pr: &PullRequest,
+    ) -> Result<bool, ConsiderError> {
+        let Some((last_run, waiting)) = self.inner.jobs.latest_for_pr(repo, pr.number).await?
+        else {
+            return Ok(false);
+        };
+        if waiting {
+            return Ok(false);
+        }
+        let Some(requested) = self
+            .inner
+            .github
+            .last_review_request_ms(token, repo, pr.number, me, my_teams)
+            .await?
+        else {
+            return Ok(false);
+        };
+        if requested <= last_run + self.inner.rerequest_margin.as_millis() as i64 {
+            return Ok(false);
+        }
+        let new = NewJob {
+            repo,
+            pr_number: pr.number,
+            head_sha: &pr.head.sha,
+            title: &pr.title,
+            author: &pr.user.login,
+            html_url: &pr.html_url,
+        };
+        let id = self
+            .inner
+            .jobs
+            .enqueue_manual(&new, crate::jobs::kinds::RERUN)
+            .await?;
+        tracing::info!(
+            repo,
+            pr = pr.number,
+            job = id,
+            "review requested again; re-reviewing"
+        );
+        let _ = self
+            .inner
+            .events
+            .emit(
+                kind::ENQUEUED,
+                serde_json::json!({
+                    "job_id": id,
+                    "repo": repo,
+                    "pr": pr.number,
+                    "head_sha": pr.head.sha,
+                    "title": pr.title,
+                    "rerequested": true,
+                }),
+            )
+            .await;
+        Ok(true)
     }
 
     /// Re-runs the Gate for a queued job right before its review, since the request may have

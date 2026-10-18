@@ -68,6 +68,9 @@ pub struct Config {
     pub policy_learning: bool,
     /// How often to look for new feedback to learn from.
     pub learning_interval: Duration,
+    /// A review requested this soon after PRowl's last run of the PR doesn't trigger another:
+    /// it is the request that run answered, seen through clocks that differ.
+    pub rerequest_margin: Duration,
     /// Replaces the OS notification service (tests).
     pub notifier: Option<crate::notify::NotifierHook>,
     /// When to keep the machine awake; `None` picks `ac_only` with a battery, else `always`.
@@ -121,6 +124,7 @@ impl Config {
             agent_verdicts: false,
             policy_learning: false,
             learning_interval: Duration::from_secs(6 * 3600),
+            rerequest_margin: Duration::from_secs(60),
             notifier: None,
             sleep_mode: None,
             power: None,

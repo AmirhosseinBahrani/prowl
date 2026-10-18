@@ -70,6 +70,10 @@ flowchart LR
    watch, and checks each one (still open? not a draft? not yours? actually requested?).
 2. **Review** — the PR is checked out in a throwaway worktree; Claude reads the diff PRowl prepared
    and the surrounding code, guided by your Review Policy, and answers with structured findings.
+   It also gets the PR's review threads and comments so far: what a resolved or answered thread
+   covers isn't raised again, and nothing already raised in a thread is posted twice. When your
+   review is requested again (e.g. after the author answered the threads), PRowl reviews the PR
+   again with the discussion as it is now — no new commit needed.
 3. **Decide** — any matched policy rule, high severity, high risk score, file rule or oversized
    diff means a human must review. Signals can only escalate, never downgrade.
 4. **Publish** — agent-only results are posted as a review with inline notes (a comment, or

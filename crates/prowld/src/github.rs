@@ -819,6 +819,63 @@ impl GitHub {
         }
     }
 
+    /// When review was last requested on the pull request from `login` or one of `teams`
+    /// (`(org, slug)`), in milliseconds — e.g. the author re-requesting it after changes.
+    pub(crate) async fn last_review_request_ms(
+        &self,
+        token: &str,
+        repo: &str,
+        number: u64,
+        login: &str,
+        teams: &[(String, String)],
+    ) -> Result<Option<i64>, GitHubError> {
+        const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              timelineItems(last: 50, itemTypes: [REVIEW_REQUESTED_EVENT]) {
+                nodes {
+                  ... on ReviewRequestedEvent {
+                    createdAt
+                    requestedReviewer {
+                      ... on User { login }
+                      ... on Team { slug organization { login } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }";
+        let (owner, name) = repo.split_once('/').unwrap_or((repo, ""));
+        let answer = self
+            .graphql(
+                token,
+                QUERY,
+                serde_json::json!({ "owner": owner, "name": name, "number": number }),
+            )
+            .await?;
+        let nodes = &answer["data"]["repository"]["pullRequest"]["timelineItems"]["nodes"];
+        Ok(nodes
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|n| {
+                let who = &n["requestedReviewer"];
+                who["login"]
+                    .as_str()
+                    .is_some_and(|l| l.eq_ignore_ascii_case(login))
+                    || who["slug"].as_str().is_some_and(|slug| {
+                        let org = who["organization"]["login"].as_str().unwrap_or_default();
+                        teams.iter().any(|(o, s)| {
+                            o.eq_ignore_ascii_case(org) && s.eq_ignore_ascii_case(slug)
+                        })
+                    })
+            })
+            .filter_map(|n| chrono::DateTime::parse_from_rfc3339(n["createdAt"].as_str()?).ok())
+            .map(|t| t.timestamp_millis())
+            .max())
+    }
+
     /// Runs a GraphQL query. `https://api.github.com` answers at `/graphql`; GitHub Enterprise
     /// (`…/api/v3`) at `…/api/graphql`.
     async fn graphql(

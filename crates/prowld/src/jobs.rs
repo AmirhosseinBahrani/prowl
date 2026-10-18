@@ -160,6 +160,24 @@ impl Jobs {
         Ok(found.is_some())
     }
 
+    /// When the newest job for this pull request was queued, and whether any of its jobs is
+    /// still to run. `None` when PRowl never queued one.
+    pub(crate) async fn latest_for_pr(
+        &self,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<Option<(i64, bool)>> {
+        let (latest, waiting): (Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT MAX(created_at_ms), MAX(status IN ('queued', 'running', 'interrupted'))
+             FROM jobs WHERE repo = ? AND pr_number = ?",
+        )
+        .bind(repo)
+        .bind(pr_number as i64)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(latest.map(|at| (at, waiting == Some(1))))
+    }
+
     /// Pull requests whose latest PRowl result was agent-only and posted as a review — the
     /// ones whose findings' threads PRowl watches.
     pub(crate) async fn agent_reviewed_prs(&self) -> anyhow::Result<Vec<(String, u64)>> {
