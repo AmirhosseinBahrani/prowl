@@ -36,6 +36,9 @@ pub struct Finding {
     pub body: String,
     #[serde(default)]
     pub suggestion: Option<String>,
+    /// A thread already on the pull request covers it, so PRowl doesn't post it again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub already_raised: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,7 +92,8 @@ pub fn schema() -> serde_json::Value {
                         "severity": severity,
                         "title": { "type": "string" },
                         "body": { "type": "string" },
-                        "suggestion": { "type": ["string", "null"] }
+                        "suggestion": { "type": ["string", "null"] },
+                        "already_raised": { "type": "boolean" }
                     }
                 }
             },

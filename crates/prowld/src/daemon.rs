@@ -117,6 +117,7 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
         events.clone(),
         queue.clone(),
         settings.clone(),
+        config.rerequest_margin,
     );
     poller.spawn(shutdown.clone());
 

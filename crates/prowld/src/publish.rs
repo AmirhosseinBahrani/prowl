@@ -3,7 +3,7 @@
 
 use crate::decider::{Decision, Reason};
 use crate::diff_lines::DiffLines;
-use crate::github::{GitHub, GitHubError, InlineComment, NewReview, Submitted};
+use crate::github::{GitHub, GitHubError, InlineComment, NewReview, ReviewThread, Submitted};
 use crate::publications::Prior;
 use crate::review::{Finding, ReviewOutput};
 
@@ -86,9 +86,9 @@ pub(crate) async fn agent_only(
     target: &Target<'_>,
     review: &ReviewOutput,
 ) -> Result<Submitted, GitHubError> {
-    let (inline, elsewhere) = split_findings(github, token, target, review).await?;
-    let body = agent_only_body(target, review, &elsewhere);
-    let comments = threads(&inline);
+    let split = split_findings(github, token, target, review, Covered::Any).await?;
+    let body = agent_only_body(target, review, &split.elsewhere, split.already);
+    let comments = threads(&split.inline);
     let submitted = github
         .create_review(
             token,
@@ -105,23 +105,92 @@ pub(crate) async fn agent_only(
     Ok(submitted)
 }
 
-/// Findings on lines the PR changed (they can be review threads) and the rest.
+/// Which existing threads count as already raising a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Covered {
+    /// Any thread, open, answered or resolved: it was said, and a reply or resolution settles it.
+    Any,
+    /// Only open ones — a verification re-raises what was resolved without being fixed.
+    Open,
+}
+
+/// A review's findings, sorted for posting.
+struct Split<'r> {
+    /// On lines the PR changed and not raised before: they become review threads.
+    inline: Vec<&'r Finding>,
+    /// Elsewhere and not raised before: listed in the review's body.
+    elsewhere: Vec<&'r Finding>,
+    /// How many were left out because a thread already raises them.
+    already: usize,
+    /// How many were on changed lines before leaving those out.
+    inline_total: usize,
+}
+
+/// Sorts a review's findings into threads to post and the rest, leaving out what a thread on
+/// the PR already raises (by anyone).
 async fn split_findings<'r>(
     github: &GitHub,
     token: &str,
     target: &Target<'_>,
     review: &'r ReviewOutput,
-) -> Result<(Vec<&'r Finding>, Vec<&'r Finding>), GitHubError> {
+    covered: Covered,
+) -> Result<Split<'r>, GitHubError> {
     let mut diff = DiffLines::default();
     for file in github.pull_files(token, target.repo, target.number).await? {
         if let Some(patch) = &file.patch {
             diff.add_patch(&file.filename, patch);
         }
     }
-    Ok(review
-        .findings
-        .iter()
-        .partition(|f| f.line.is_some_and(|line| diff.contains(&f.file, line))))
+    let existing = if review.findings.is_empty() {
+        Vec::new()
+    } else {
+        github
+            .review_threads(token, target.repo, target.number)
+            .await?
+    };
+    let mut split = Split {
+        inline: Vec::new(),
+        elsewhere: Vec::new(),
+        already: 0,
+        inline_total: 0,
+    };
+    for f in &review.findings {
+        let on_diff = f.line.is_some_and(|line| diff.contains(&f.file, line));
+        split.inline_total += usize::from(on_diff);
+        if already_raised(f, &existing, covered) {
+            split.already += 1;
+        } else if on_diff {
+            split.inline.push(f);
+        } else {
+            split.elsewhere.push(f);
+        }
+    }
+    Ok(split)
+}
+
+/// How far apart (in lines) a finding and a thread about the same issue can be: the code may
+/// have moved since the thread was opened.
+const NEARBY_LINES: u32 = 5;
+
+/// Whether a thread already raises this finding: the reviewer said so, or a thread on the same
+/// file near the same line opens with the finding's title (PRowl's earlier post of it).
+fn already_raised(f: &Finding, threads: &[ReviewThread], covered: Covered) -> bool {
+    if f.already_raised {
+        return true;
+    }
+    let title = f.title.trim();
+    if title.is_empty() {
+        return false;
+    }
+    threads.iter().any(|t| {
+        let counts = covered == Covered::Any || !t.resolved;
+        let near = match (f.line, t.line) {
+            (Some(a), Some(b)) => a.abs_diff(b) <= NEARBY_LINES,
+            // Outdated threads lose their line; findings off the diff have none.
+            _ => true,
+        };
+        counts && near && t.path == f.file && t.body.contains(title)
+    })
 }
 
 /// One review thread per finding, on its line.
@@ -146,9 +215,9 @@ async fn post_findings_threads(
     github: &GitHub,
     token: &str,
     target: &Target<'_>,
-    inline: &[&Finding],
+    split: &Split<'_>,
 ) -> Result<Option<Submitted>, GitHubError> {
-    if inline.is_empty() {
+    if split.inline_total == 0 {
         return Ok(None);
     }
     let already = github
@@ -168,6 +237,10 @@ async fn post_findings_threads(
             body: r.body,
             state: Some(r.state),
         }));
+    }
+    // Everything on the changed lines was raised before.
+    if split.inline.is_empty() {
+        return Ok(None);
     }
     let body = format!(
         "### 🔎 PRowl findings\n\n> Written by an AI agent (Claude, run by PRowl) on behalf of @{}. \
@@ -189,7 +262,7 @@ async fn post_findings_threads(
                 commit_id: target.head_sha,
                 body: &body,
                 event: "COMMENT",
-                comments: threads(inline),
+                comments: threads(&split.inline),
             },
         )
         .await
@@ -237,22 +310,23 @@ pub(crate) async fn publish_verification(
             Vec::new(),
         ),
         Ok(output) => {
-            let (inline, elsewhere) = split_findings(github, token, target, output).await?;
+            let split = split_findings(github, token, target, output, Covered::Open).await?;
             let mut body = format!(
                 "### 🔁 PRowl verification: {} issue(s) remain\n\n{intro}{}\n\n",
                 output.findings.len(),
                 output.summary.trim()
             );
-            if !inline.is_empty() {
+            if !split.inline.is_empty() {
                 body.push_str(&format!(
                     "**{} posted as threads** on the changed lines — resolve them once they're \
                      fixed and PRowl checks again.\n\n",
-                    inline.len()
+                    split.inline.len()
                 ));
             }
-            push_findings(&mut body, &elsewhere);
+            push_already(&mut body, split.already);
+            push_findings(&mut body, &split.elsewhere);
             body.push_str(&footer);
-            ("COMMENT", body, threads(&inline))
+            ("COMMENT", body, threads(&split.inline))
         }
         Err(problem) => (
             "COMMENT",
@@ -367,15 +441,27 @@ pub(crate) async fn publish_result(
                     })
                     .map(|c| (c.id, c.html_url));
             }
-            let (inline, elsewhere) = match review {
-                Ok(review) => split_findings(github, token, target, review).await?,
-                Err(_) => (Vec::new(), Vec::new()),
+            let split = match review {
+                Ok(review) => split_findings(github, token, target, review, Covered::Any).await?,
+                Err(_) => Split {
+                    inline: Vec::new(),
+                    elsewhere: Vec::new(),
+                    already: 0,
+                    inline_total: 0,
+                },
             };
-            let findings_review = post_findings_threads(github, token, target, &inline).await?;
+            let findings_review = post_findings_threads(github, token, target, &split).await?;
             let threads_note = findings_review
                 .as_ref()
-                .map(|r| (inline.len(), r.html_url.as_str()));
-            let body = needs_human_body(target, review.ok(), reasons, &elsewhere, threads_note);
+                .map(|r| (split.inline.len(), r.html_url.as_str()));
+            let body = needs_human_body(
+                target,
+                review.ok(),
+                reasons,
+                &split.elsewhere,
+                threads_note,
+                split.already,
+            );
             let existing = match &prior.comment {
                 Some((id, _)) => ignore_missing(
                     github
@@ -505,6 +591,7 @@ pub(crate) fn needs_human_body(
     reasons: &[Reason],
     listed: &[&Finding],
     threads: Option<(usize, &str)>,
+    already: usize,
 ) -> String {
     let mut body = String::new();
     body.push_str(
@@ -539,11 +626,12 @@ pub(crate) fn needs_human_body(
                 }
                 body.push('\n');
             }
-            if let Some((count, url)) = threads {
+            if let Some((count, url)) = threads.filter(|(count, _)| *count > 0) {
                 body.push_str(&format!(
                     "**Findings:** {count} posted as [review threads]({url}) on the changed lines.\n\n"
                 ));
             }
+            push_already(&mut body, already);
             push_findings(&mut body, listed);
         }
         None if reasons.iter().any(|r| matches!(r, Reason::TooLarge { .. })) => body.push_str(
@@ -626,6 +714,7 @@ pub(crate) fn agent_only_body(
     target: &Target<'_>,
     review: &ReviewOutput,
     other_findings: &[&Finding],
+    already: usize,
 ) -> String {
     let mut body = String::new();
     body.push_str("### 🤖 PRowl automated review\n\n");
@@ -651,6 +740,7 @@ pub(crate) fn agent_only_body(
         }
         body.push('\n');
     }
+    push_already(&mut body, already);
     push_findings(&mut body, other_findings);
     body.push_str(&format!(
         "<sub>Commit {} · policy {} v{}</sub>\n{}",
@@ -660,6 +750,16 @@ pub(crate) fn agent_only_body(
         marker(target)
     ));
     body
+}
+
+/// Notes the findings left out because a thread on the PR already raises them.
+fn push_already(body: &mut String, already: usize) {
+    if already > 0 {
+        body.push_str(&format!(
+            "**Already raised:** {already} finding(s) are covered by existing review threads and \
+             weren't posted again.\n\n"
+        ));
+    }
 }
 
 fn push_findings(body: &mut String, findings: &[&Finding]) {
@@ -753,4 +853,82 @@ pub(crate) fn describe(decision: Decision, reasons: &[Reason]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::review::Severity;
+
+    fn finding(line: Option<u32>, title: &str) -> Finding {
+        Finding {
+            file: "src/a.rs".into(),
+            line,
+            severity: Severity::High,
+            title: title.into(),
+            body: "body".into(),
+            suggestion: None,
+            already_raised: false,
+        }
+    }
+
+    fn thread(line: Option<u32>, resolved: bool, body: &str) -> ReviewThread {
+        ReviewThread {
+            path: "src/a.rs".into(),
+            line,
+            resolved,
+            outdated: line.is_none(),
+            author: "octo".into(),
+            body: body.into(),
+            comments: vec![],
+            resolved_by: None,
+        }
+    }
+
+    #[test]
+    fn a_finding_posted_before_near_the_same_line_is_already_raised() {
+        let posted = thread(Some(10), false, "**high** — Token logged\n\nbody");
+        assert!(already_raised(
+            &finding(Some(12), "Token logged"),
+            std::slice::from_ref(&posted),
+            Covered::Any
+        ));
+        assert!(!already_raised(
+            &finding(Some(40), "Token logged"),
+            std::slice::from_ref(&posted),
+            Covered::Any
+        ));
+        assert!(!already_raised(
+            &finding(Some(10), "Unchecked unwrap"),
+            &[posted],
+            Covered::Any
+        ));
+        let outdated = thread(None, false, "**high** — Token logged");
+        assert!(already_raised(
+            &finding(Some(3), "Token logged"),
+            &[outdated],
+            Covered::Any
+        ));
+    }
+
+    #[test]
+    fn a_verification_raises_again_what_was_resolved_but_not_what_is_open() {
+        let f = finding(Some(10), "Token logged");
+        let resolved = thread(Some(10), true, "**high** — Token logged");
+        let open = thread(Some(10), false, "**high** — Token logged");
+        assert!(already_raised(
+            &f,
+            std::slice::from_ref(&resolved),
+            Covered::Any
+        ));
+        assert!(!already_raised(&f, &[resolved], Covered::Open));
+        assert!(already_raised(&f, &[open], Covered::Open));
+    }
+
+    #[test]
+    fn the_reviewer_can_say_a_thread_already_covers_a_finding() {
+        let mut f = finding(Some(10), "Missing check");
+        f.already_raised = true;
+        assert!(already_raised(&f, &[], Covered::Any));
+    }
 }

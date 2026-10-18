@@ -342,6 +342,11 @@ impl Worker {
         } else {
             None
         };
+        // A review sees what was said on the PR so far, so it doesn't repeat it.
+        let discussion = match verify {
+            Some(_) => prompt::Discussion::default(),
+            None => self.discussion(job, &token).await,
+        };
 
         let ClaudeRun {
             policy,
@@ -351,7 +356,15 @@ impl Worker {
             duration_ms,
             alarms,
         } = self
-            .run_claude(job, &pr, &reviewer, &token, budget_left, verify.as_ref())
+            .run_claude(
+                job,
+                &pr,
+                &reviewer,
+                &token,
+                budget_left,
+                verify.as_ref(),
+                &discussion,
+            )
             .await?;
 
         let review_id = inner
@@ -442,8 +455,42 @@ impl Worker {
         .await
     }
 
+    /// The PR's review threads and conversation, without PRowl's own conversation comments.
+    /// Context only — what is already posted is checked again before publishing — so a part
+    /// GitHub can't give is left out rather than failing the review.
+    async fn discussion(&self, job: &Job, token: &str) -> prompt::Discussion {
+        let github = &self.inner.github;
+        let threads = github
+            .review_threads(token, &job.repo, job.pr_number)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(job = job.id, error = %e, "couldn't load the review threads");
+                Vec::new()
+            });
+        let comments = github
+            .list_issue_comments(token, &job.repo, job.pr_number)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(job = job.id, error = %e, "couldn't load the conversation");
+                Vec::new()
+            })
+            .into_iter()
+            .filter_map(|c| {
+                let body = c.body?;
+                (!body.contains("<!-- prowl:")).then(|| crate::github::ThreadComment {
+                    author: c.user.map(|u| u.login).unwrap_or_else(|| "ghost".into()),
+                    body,
+                    association: String::new(),
+                    created_at: String::new(),
+                })
+            })
+            .collect();
+        prompt::Discussion { threads, comments }
+    }
+
     /// Checks out the PR, asks Claude with the effective policy (one repair attempt) and
     /// returns the answer. Publishes and stores nothing.
+    #[allow(clippy::too_many_arguments)]
     async fn run_claude(
         &self,
         job: &Job,
@@ -452,6 +499,7 @@ impl Worker {
         token: &str,
         budget: Option<f64>,
         verify: Option<&VerifyInput>,
+        discussion: &prompt::Discussion,
     ) -> anyhow::Result<ClaudeRun> {
         let inner = &self.inner;
         let scope = Scope::parse_repo(&job.repo)?;
@@ -504,7 +552,7 @@ impl Worker {
         };
         let message = match verify {
             Some(v) => prompt::verify_message(&context, &policy, &v.previous, &v.threads),
-            None => prompt::first_message(&context, &policy),
+            None => prompt::first_message(&context, &policy, discussion),
         };
         self.emit(
             kind::STARTED,
@@ -666,8 +714,9 @@ impl Worker {
             }
         };
         inner.claude.locate()?;
+        let discussion = self.discussion(&job, &token).await;
         let run = self
-            .run_claude(&job, &pr, &reviewer, &token, budget, None)
+            .run_claude(&job, &pr, &reviewer, &token, budget, None, &discussion)
             .await?;
         inner.reviews.record_dry_run(repo, number, run.cost).await?;
         let rule_ids: Vec<String> = run.policy.rules.iter().map(|r| r.id.clone()).collect();

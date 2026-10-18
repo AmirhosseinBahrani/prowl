@@ -6,6 +6,18 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Reviews read the discussion first**: every review gets the PR's review threads (open,
+  resolved, outdated, answered) and its conversation comments as context. Issues a resolved or
+  answered thread already covers aren't raised again, and a finding an existing thread already
+  raises — PRowl's own or another reviewer's — isn't posted twice; the review notes how many were
+  left out.
+- **Re-requested reviews run again**: when a review is requested again on a PR PRowl already
+  reviewed (e.g. the author answered the threads and clicked *Re-request review*), PRowl reviews
+  it again even without a new commit, with the threads and comments as they are now, decides
+  again and updates its comment and the queue.
+
 ## [0.1.7] - 2026-10-18
 
 ### Added

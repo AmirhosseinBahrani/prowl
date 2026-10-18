@@ -56,7 +56,13 @@ pub struct FakeGitHub {
 
 impl FakeGitHub {
     pub async fn start() -> anyhow::Result<Self> {
-        let inner = Arc::new(Mutex::new(Inner::default()));
+        let mut state = Inner::default();
+        // A pull request nobody has discussed: no review threads, no review requests.
+        state.routes.insert(
+            (Method::POST, "/graphql".to_owned()),
+            vec![(StatusCode::OK, empty_pull_request())].into(),
+        );
+        let inner = Arc::new(Mutex::new(state));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}", listener.local_addr()?);
         let app = Router::new().fallback(handle).with_state(inner.clone());
@@ -143,6 +149,8 @@ impl FakeGitHub {
         self.requests()
             .into_iter()
             .filter(|r| r.method != Method::GET && r.method != Method::HEAD)
+            // GraphQL queries are POSTs that only read.
+            .filter(|r| r.path != "/graphql" || r.raw_body.contains("mutation"))
             .collect()
     }
 }
@@ -244,4 +252,12 @@ fn fnv(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
     })
+}
+
+/// GitHub's GraphQL answer for a pull request without review threads or timeline events.
+pub fn empty_pull_request() -> serde_json::Value {
+    serde_json::json!({ "data": { "repository": { "pullRequest": {
+        "reviewThreads": { "pageInfo": { "hasNextPage": false, "endCursor": null }, "nodes": [] },
+        "timelineItems": { "nodes": [] }
+    } } } })
 }
