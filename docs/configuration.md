@@ -22,6 +22,7 @@ and are stored in the daemon's database. Scripts can use the Local API instead
 | `skip_drafts` | `true` | — | Ignore draft PRs until they're marked ready. |
 | `include_team_requests` | `false` | — | Also review PRs requested from a team you're in, not only from you personally. |
 | `agent_verdicts` | `false` | — | On PRs that don't need a human, post Claude's recommendation as the verdict: **approve** or **request changes** instead of a comment. Earlier agent approvals are dismissed when a newer commit needs a human. Also turns on **automatic verification**: once every thread PRowl opened on an agent-only PR is resolved, a verification agent checks the fixes and approves the PR if all were addressed (once per commit). |
+| `policy_learning` | `false` | — | Learn each repository's policy from its collaborators' comments on PRowl's reviews and apply the changes (as revertible `learned` versions). See [learning from comments](review-policy.md#learning-from-comments). |
 | `notifications` | `true` | — | Desktop notifications when a PR needs you or a review fails. |
 | `file_rules` | none | — | Per-repository globs that always need a human. See below. |
 

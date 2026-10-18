@@ -33,6 +33,7 @@ pub(crate) struct AppState {
     pub reviews: Reviews,
     pub transcripts: crate::transcripts::Transcripts,
     pub updates: crate::updates::Updates,
+    pub learner: crate::learning::Learner,
     pub settings: crate::settings::SettingsStore,
     pub power: Power,
     pub claude: std::sync::Arc<crate::claude::Claude>,
@@ -70,6 +71,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/poll", post(poll_now))
         .route("/v1/rerun", post(rerun))
         .route("/v1/verify", post(verify))
+        .route("/v1/policies/learn", post(learn_policy))
         .route("/v1/threads", get(threads))
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/jobs/{id}/transcript", get(job_transcript))
@@ -153,6 +155,26 @@ async fn verify(
         .await
         .map(|job| (StatusCode::ACCEPTED, Json(job)))
         .map_err(manual_error)
+}
+
+#[derive(Deserialize)]
+struct LearnRequest {
+    /// One repository (`owner/repo`); every watched one when absent.
+    #[serde(default)]
+    repo: Option<String>,
+}
+
+/// Learns from reviewers' feedback now, applying what it learns to each repository's policy.
+async fn learn_policy(
+    State(state): State<AppState>,
+    Json(body): Json<LearnRequest>,
+) -> Result<Json<Vec<crate::learning::LearningRun>>, ApiError> {
+    let runs = match body.repo {
+        Some(repo) => state.learner.learn(&repo).await.map(|run| vec![run]),
+        None => state.learner.learn_all().await,
+    };
+    runs.map(Json)
+        .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))
 }
 
 #[derive(Deserialize)]

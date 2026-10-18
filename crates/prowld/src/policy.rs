@@ -202,6 +202,16 @@ impl PolicyStore {
         }))
     }
 
+    /// Saves a version written by policy learning (shown as `learned` in its history).
+    pub(crate) async fn save_learned(
+        &self,
+        scope: &Scope,
+        content: &str,
+    ) -> Result<EffectivePolicy, PolicyError> {
+        let _guard = self.lock.lock().await;
+        self.write(scope, content, "learned").await
+    }
+
     pub(crate) async fn save(
         &self,
         scope: &Scope,

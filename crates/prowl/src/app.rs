@@ -120,6 +120,7 @@ pub enum Msg {
     Reviews(Result<Vec<prowld::Review>, String>),
     Jobs(Result<Vec<prowld::Job>, String>),
     Rerun(Result<prowld::Job, String>),
+    Learned(Result<Vec<prowld::learning::LearningRun>, String>),
     ServiceStopped(Result<(), String>),
     JobCancelled(Result<prowld::Cancelled, String>),
     Verify(Result<prowld::Job, String>),
@@ -208,6 +209,10 @@ pub enum Cmd {
     LoadRecentEvents,
     LoadReviews,
     LoadJobs,
+    /// Learn the policy from reviewers' comments (one repository, or all watched).
+    LearnPolicy {
+        repo: Option<String>,
+    },
     /// Review this PR again at its current commit.
     Rerun {
         repo: String,
@@ -511,6 +516,14 @@ impl App {
                     job.repo, job.pr_number
                 ));
                 self.reviews.refresh()
+            }
+            Msg::Learned(Ok(runs)) => {
+                self.notice = Some(learned_notice(&runs));
+                vec![Cmd::LoadPolicies]
+            }
+            Msg::Learned(Err(e)) => {
+                self.notice = Some(format!("Couldn't learn from comments: {e}"));
+                vec![]
             }
             Msg::Rerun(Err(e)) => {
                 self.notice = Some(format!("Couldn't re-review: {e}"));
@@ -956,6 +969,41 @@ impl App {
             page: self.repos.page_no + 1,
             refresh,
         }]
+    }
+}
+
+/// One line about what a learning run (or several) did.
+pub fn learned_notice(runs: &[prowld::learning::LearningRun]) -> String {
+    let changed: Vec<String> = runs
+        .iter()
+        .filter(|r| r.applied)
+        .map(|r| {
+            format!(
+                "{}: {} change(s) from {} comment(s) (v{})",
+                r.repo,
+                r.changes.len(),
+                r.signals,
+                r.version_id.unwrap_or_default()
+            )
+        })
+        .collect();
+    if !changed.is_empty() {
+        return format!(
+            "Learned — {}. See Policy → [h] history to review or undo.",
+            changed.join("; ")
+        );
+    }
+    match runs {
+        [] => "No watched repositories to learn from.".into(),
+        [one] => format!(
+            "{}: nothing learned ({}).",
+            one.repo,
+            one.note.as_deref().unwrap_or("no changes")
+        ),
+        many => format!(
+            "Nothing learned in {} repositories (no new feedback calling for changes).",
+            many.len()
+        ),
     }
 }
 

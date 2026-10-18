@@ -14,6 +14,7 @@ pub mod gate;
 mod github;
 mod injection;
 pub mod jobs;
+pub mod learning;
 pub mod notify;
 pub mod policy;
 mod policy_api;

@@ -95,6 +95,11 @@ pub const FIELDS: &[Field] = &[
         kind: Kind::Bool,
     },
     Field {
+        key: "policy_learning",
+        label: "Learn the policy from reviewers' comments",
+        kind: Kind::Bool,
+    },
+    Field {
         key: "notifications",
         label: "Desktop notifications",
         kind: Kind::Bool,

@@ -68,7 +68,7 @@ pub fn draw(tab: &PolicyTab, frame: &mut Frame, area: Rect) {
         crate::theme::hints(" ↑↓ version · [r] restore · [esc] back")
     } else {
         crate::theme::hints(
-            " [e] edit · [h] history · [n] new override · [x] delete override · [t] dry-run a PR",
+            " [e] edit · [h] history · [n] new override · [x] delete · [t] dry-run · [L] learn from comments",
         )
     };
     frame.render_widget(footer_line, footer);

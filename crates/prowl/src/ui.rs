@@ -574,6 +574,10 @@ pub fn help_lines() -> Vec<Line<'static>> {
             "5 Policy",
             "e edit · h history · r restore · n new override · x delete · t dry-run",
         ),
+        row(
+            "",
+            "L learn from reviewers' comments (this repo, or all on global)",
+        ),
         row("6 Repos  / space", "search · watch / unwatch"),
         row(
             "7 Settings",

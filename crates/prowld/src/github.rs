@@ -215,6 +215,9 @@ pub(crate) struct SubmittedReview {
     pub state: String,
     #[serde(default)]
     pub submitted_at: Option<String>,
+    /// GitHub's author association (OWNER, MEMBER, COLLABORATOR, …).
+    #[serde(default)]
+    pub author_association: Option<String>,
 }
 
 /// A comment on a PR's conversation.
@@ -265,6 +268,11 @@ pub struct ReviewThread {
 pub struct ThreadComment {
     pub author: String,
     pub body: String,
+    /// GitHub's `authorAssociation`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, …
+    #[serde(default)]
+    pub association: String,
+    #[serde(default)]
+    pub created_at: String,
 }
 
 /// A published release.
@@ -751,7 +759,7 @@ impl GitHub {
                 pageInfo { hasNextPage endCursor }
                 nodes {
                   isResolved isOutdated path line
-                  comments(first: 50) { nodes { author { login } body } }
+                  comments(first: 50) { nodes { author { login } authorAssociation body createdAt } }
                 }
               }
             }
@@ -780,6 +788,11 @@ impl GitHub {
                     .map(|c| ThreadComment {
                         author: c["author"]["login"].as_str().unwrap_or("ghost").to_owned(),
                         body: c["body"].as_str().unwrap_or_default().to_owned(),
+                        association: c["authorAssociation"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                        created_at: c["createdAt"].as_str().unwrap_or_default().to_owned(),
                     })
                     .collect();
                 threads.push(ReviewThread {

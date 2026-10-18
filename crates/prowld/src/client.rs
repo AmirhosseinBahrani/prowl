@@ -182,6 +182,16 @@ impl ApiClient {
             .await
     }
 
+    /// Learns from reviewers' comments now, for one repository or every watched one.
+    pub async fn learn_policy(
+        &self,
+        repo: Option<&str>,
+    ) -> Result<Vec<crate::learning::LearningRun>, ClientError> {
+        let body = serde_json::json!({ "repo": repo });
+        self.call_json_body(Method::POST, "/v1/policies/learn", Some(body))
+            .await
+    }
+
     /// Reviews `repo#pr` again at its current commit; returns the queued job.
     pub async fn rerun(&self, repo: &str, pr: u64) -> Result<Job, ClientError> {
         let body = serde_json::json!({ "repo": repo, "pr": pr });

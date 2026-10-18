@@ -194,7 +194,21 @@ pub async fn start(config: Config) -> anyhow::Result<RunningDaemon> {
             shutdown.clone(),
         );
     }
+    let learner = crate::learning::Learner::new(crate::learning::LearnerParts {
+        github: github.clone(),
+        auth: auth.clone(),
+        repos: repos.clone(),
+        policies: policies.clone(),
+        reviews: reviews.clone(),
+        db: db.clone(),
+        claude: std::sync::Arc::new(claude_for(&config)),
+        settings: settings.clone(),
+        events: events.clone(),
+        workdir: config.home.join("learn"),
+    });
+    learner.spawn(config.learning_interval, shutdown.clone());
     let state = AppState {
+        learner,
         auth: auth.clone(),
         github_api: github.clone(),
         policies,
