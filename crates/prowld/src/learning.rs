@@ -352,7 +352,9 @@ impl Learner {
                     Some(line) => format!("{}:{line}", thread.path),
                     None => thread.path.clone(),
                 };
-                if is_prowl(&first.body) {
+                // PRowl's own thread: opened by the account it posts as, with its marker.
+                // Anyone can paste the marker; only the author makes it PRowl's.
+                if is_prowl(&first.body) && first.author.eq_ignore_ascii_case(login) {
                     let finding = format!("{} — {place}", headline(&first.body));
                     for reply in thread.comments.iter().skip(1) {
                         if collaborator(&reply.association)
@@ -368,7 +370,16 @@ impl Learner {
                             ));
                         }
                     }
-                    if thread.resolved && !thread.outdated && after(&first.created_at, since) {
+                    // Resolving is a judgement only when the user made it: a PR's author can
+                    // resolve threads on their own PR.
+                    if thread.resolved
+                        && !thread.outdated
+                        && thread
+                            .resolved_by
+                            .as_deref()
+                            .is_some_and(|by| by.eq_ignore_ascii_case(login))
+                        && after(&first.created_at, since)
+                    {
                         signals.push(signal(
                             "finding_resolved_without_changing_that_code",
                             pr,
@@ -425,7 +436,7 @@ impl Learner {
             signals.push(signal(kind, pr as u64, login, &why, ""));
         }
         // Comments are untrusted: anything written to steer an AI is left out.
-        signals.retain(|s| crate::injection::scan("", &s.text, "", "").is_empty());
+        signals.retain(|s| crate::injection::scan(&s.about, &s.text, "", "").is_empty());
         signals.truncate(MAX_SIGNALS);
         Ok(signals)
     }

@@ -262,6 +262,9 @@ pub struct ReviewThread {
     /// Every comment in the thread, the opening one first (up to 50).
     #[serde(default)]
     pub comments: Vec<ThreadComment>,
+    /// Who resolved it, if it is resolved.
+    #[serde(default)]
+    pub resolved_by: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -758,7 +761,7 @@ impl GitHub {
               reviewThreads(first: 100, after: $after) {
                 pageInfo { hasNextPage endCursor }
                 nodes {
-                  isResolved isOutdated path line
+                  isResolved isOutdated path line resolvedBy { login }
                   comments(first: 50) { nodes { author { login } authorAssociation body createdAt } }
                 }
               }
@@ -797,6 +800,7 @@ impl GitHub {
                     .collect();
                 threads.push(ReviewThread {
                     comments,
+                    resolved_by: node["resolvedBy"]["login"].as_str().map(str::to_owned),
                     path: node["path"].as_str().unwrap_or_default().to_owned(),
                     line: node["line"].as_u64().map(|l| l as u32),
                     resolved: node["isResolved"].as_bool().unwrap_or(false),
