@@ -15,6 +15,14 @@ All notable changes to PRowl are documented here. The format is based on
   version. Only collaborators count, injection-like comments are dropped, and a policy without
   rules is refused.
 
+### Changed
+
+- Quitting PRowl's background service normally — Activity Monitor's "Quit", or `kill` without
+  `-9` — now stops it until your next login or `prowld service start`, instead of launchd or
+  systemd starting it again. It's still restarted after a crash (and after a Force Quit, which
+  macOS can't tell from one). A quit during startup is clean too, and `prowld service start`
+  works after such a quit.
+
 ## [0.1.6] - 2026-10-17
 
 ### Added
