@@ -6,6 +6,8 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-10-18
+
 ### Added
 
 - **Reviews read the discussion first**: every review gets the PR's review threads (open,
@@ -184,7 +186,8 @@ First public version.
 - One-line installers (`install.sh`, `install.ps1`) that verify checksums, install into your home
   directory with versioned upgrades, and start the background service.
 
-[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/AmirhosseinBahrani/prowl/compare/v0.1.4...v0.1.5

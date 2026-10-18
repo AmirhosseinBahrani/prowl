@@ -2444,7 +2444,7 @@ dependencies = [
 
 [[package]]
 name = "prowl"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -2460,7 +2460,7 @@ dependencies = [
 
 [[package]]
 name = "prowl-e2e"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "axum",
@@ -2479,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "prowld"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "anyhow",
  "async-stream",
