@@ -86,13 +86,7 @@ async fn verifying_a_queued_pr_approves_it_when_everything_was_fixed() {
         h.client().queue().await.unwrap().is_empty(),
         "it leaves the queue"
     );
-    let labelled = h
-        .github
-        .requests_to(Method::POST, "/repos/acme/api/issues/7/labels");
-    assert_eq!(
-        labelled.last().unwrap().body.as_ref().unwrap()["labels"],
-        json!(["prowl:human-approved"])
-    );
+    assert_no_label_writes(&h);
     h.shutdown().await.unwrap();
 }
 

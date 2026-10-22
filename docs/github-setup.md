@@ -54,7 +54,7 @@ register an app.
   token.
 - **Fine-grained token** (<https://github.com/settings/personal-access-tokens/new>): choose the
   resource owner (you or an organisation) and the repositories, then grant
-  **Pull requests: Read and write**, **Contents: Read**, **Issues: Read and write** (labels and
+  **Pull requests: Read and write**, **Contents: Read**, **Issues: Read and write** (PR
   comments) and **Metadata: Read**. Organisations may require approval of fine-grained tokens.
 
 Then sign in with it — in the TUI press `t` on the **Connect GitHub** screen, or in the

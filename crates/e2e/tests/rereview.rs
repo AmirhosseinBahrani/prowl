@@ -95,15 +95,7 @@ async fn needs_human_then_agent_only_resolves_the_comment_and_leaves_the_queue()
             .unwrap()
             .contains("No longer waiting")
     );
-    assert_eq!(
-        h.github
-            .requests_to(
-                Method::DELETE,
-                "/repos/acme/api/issues/7/labels/prowl%3Aneeds-human"
-            )
-            .len(),
-        1
-    );
+    assert_no_label_writes(&h);
     assert!(h.client().queue().await.unwrap().is_empty());
     let left = events(&h)
         .await
@@ -139,15 +131,7 @@ async fn agent_only_then_needs_human_supersedes_the_review_and_queues_the_pr() {
             .unwrap()
             .contains("superseded")
     );
-    assert_eq!(
-        h.github
-            .requests_to(
-                Method::DELETE,
-                "/repos/acme/api/issues/7/labels/prowl%3Aagent-reviewed"
-            )
-            .len(),
-        1
-    );
+    assert_no_label_writes(&h);
     assert_eq!(h.client().queue().await.unwrap().len(), 1);
     h.shutdown().await.unwrap();
 }

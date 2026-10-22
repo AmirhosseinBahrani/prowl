@@ -83,20 +83,7 @@ async fn an_agent_only_review_is_posted_as_a_comment_review() {
     assert!(text.contains("`README.md:40`"));
 
     assert_eq!(body["event"], "COMMENT");
-    let created = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/labels"));
-    assert_eq!(
-        created[0].body.as_ref().unwrap()["name"],
-        "prowl:agent-reviewed"
-    );
-    let labelled = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/labels"));
-    assert_eq!(
-        labelled[0].body.as_ref().unwrap()["labels"],
-        json!(["prowl:agent-reviewed"])
-    );
+    assert_no_label_writes(&h);
     h.shutdown().await.unwrap();
 }
 

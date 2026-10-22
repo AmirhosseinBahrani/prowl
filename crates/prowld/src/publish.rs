@@ -7,40 +7,6 @@ use crate::github::{GitHub, GitHubError, InlineComment, NewReview, ReviewThread,
 use crate::publications::Prior;
 use crate::review::{Finding, ReviewOutput};
 
-pub const LABEL_AGENT_REVIEWED: &str = "prowl:agent-reviewed";
-pub const LABEL_NEEDS_HUMAN: &str = "prowl:needs-human";
-pub const LABEL_HUMAN_APPROVED: &str = "prowl:human-approved";
-pub const LABEL_CHANGES_REQUESTED: &str = "prowl:changes-requested";
-
-/// `(name, colour, description)` for every label PRowl manages.
-pub(crate) fn label_spec(name: &str) -> (&'static str, &'static str) {
-    match name {
-        LABEL_AGENT_REVIEWED => (
-            "0e8a16",
-            "Reviewed by the PRowl agent; no human review required by policy",
-        ),
-        LABEL_NEEDS_HUMAN => ("d93f0b", "PRowl: waiting for a human review before merging"),
-        LABEL_HUMAN_APPROVED => ("1d76db", "PRowl: approved by a human reviewer"),
-        LABEL_CHANGES_REQUESTED => ("e99695", "PRowl: a human reviewer requested changes"),
-        _ => ("ededed", "PRowl"),
-    }
-}
-
-/// Makes sure `label` exists in the repository and is on the PR.
-pub(crate) async fn add_label(
-    github: &GitHub,
-    token: &str,
-    repo: &str,
-    number: u64,
-    label: &str,
-) -> Result<(), GitHubError> {
-    let (color, description) = label_spec(label);
-    github
-        .ensure_label(token, repo, label, color, description)
-        .await?;
-    github.add_labels(token, repo, number, &[label]).await
-}
-
 /// What a published review is about.
 pub(crate) struct Target<'a> {
     pub repo: &'a str,
@@ -79,7 +45,7 @@ pub(crate) fn marker(target: &Target<'_>) -> String {
 }
 
 /// Submits an AGENT_ONLY review with inline notes on diff lines. It is a COMMENT review unless
-/// agent verdicts are on (see [`agent_event`]). The caller labels the PR.
+/// agent verdicts are on (see [`agent_event`]).
 pub(crate) async fn agent_only(
     github: &GitHub,
     token: &str,
@@ -359,7 +325,7 @@ pub(crate) async fn publish_verification(
 ///   review is marked superseded, and a waiting-for-approval comment is marked resolved.
 /// - NEEDS_HUMAN: findings on changed lines as a COMMENT review with a thread each, then the
 ///   waiting-for-approval comment (edited if it exists) with the reasons and the remaining
-///   findings. A previous PRowl review is marked superseded and its label removed.
+///   findings. A previous PRowl review is marked superseded.
 pub(crate) async fn publish_result(
     github: &GitHub,
     token: &str,
@@ -394,14 +360,6 @@ pub(crate) async fn publish_result(
                 },
                 None => agent_only(github, token, target, review).await?,
             };
-            add_label(
-                github,
-                token,
-                target.repo,
-                target.number,
-                LABEL_AGENT_REVIEWED,
-            )
-            .await?;
             if let Some((old, _)) = prior.agent_review.take() {
                 let body = superseded_body(target, &posted.html_url);
                 ignore_missing(
@@ -418,9 +376,6 @@ pub(crate) async fn publish_result(
                         .update_issue_comment(token, target.repo, *comment, &body)
                         .await,
                 )?;
-                github
-                    .remove_label(token, target.repo, target.number, LABEL_NEEDS_HUMAN)
-                    .await?;
             }
             prior.agent_review = Some((posted.id, posted.html_url.clone()));
             Ok(posted)
@@ -479,7 +434,6 @@ pub(crate) async fn publish_result(
                         .await?
                 }
             };
-            add_label(github, token, target.repo, target.number, LABEL_NEEDS_HUMAN).await?;
             if let Some((old, _)) = prior
                 .agent_review
                 .take()
@@ -496,9 +450,6 @@ pub(crate) async fn publish_result(
                     .list_reviews(token, target.repo, target.number)
                     .await?;
                 withdraw_verdict(github, token, target, &existing, old, &comment.html_url).await?;
-                github
-                    .remove_label(token, target.repo, target.number, LABEL_AGENT_REVIEWED)
-                    .await?;
             }
             prior.comment = Some((comment.id, comment.html_url.clone()));
             // The findings review is PRowl's review of this commit; a later one supersedes it.

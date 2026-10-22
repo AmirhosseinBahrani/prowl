@@ -62,13 +62,7 @@ async fn needs_human_posts_a_waiting_for_approval_comment_not_a_review() {
     assert!(body.contains("Adds a login rate limit."));
     assert!(body.contains("No limit on retries"), "findings are listed");
     assert!(body.contains("<!-- prowl:review pr=acme/api#7 sha="));
-    let labelled = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/labels"));
-    assert_eq!(
-        labelled[0].body.as_ref().unwrap()["labels"],
-        json!(["prowl:needs-human"])
-    );
+    assert_no_label_writes(&h);
     h.shutdown().await.unwrap();
 }
 
@@ -148,7 +142,7 @@ async fn the_riskiest_pr_comes_first() {
 }
 
 #[tokio::test]
-async fn approving_in_the_app_submits_the_users_review_and_relabels() {
+async fn approving_in_the_app_submits_the_users_review() {
     let h = queued(&[7], &valid_review()).await;
     let head = h.client().queue().await.unwrap()[0].head_sha.clone();
 
@@ -168,18 +162,7 @@ async fn approving_in_the_app_submits_the_users_review_and_relabels() {
     assert_eq!(body["event"], "APPROVE");
     assert_eq!(body["commit_id"], head);
     assert_eq!(body["body"], "Looks good to me");
-    let removed = h.github.requests_to(
-        Method::DELETE,
-        &format!("/repos/{REPO}/issues/7/labels/prowl%3Aneeds-human"),
-    );
-    assert_eq!(removed.len(), 1);
-    let added = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/labels"));
-    assert_eq!(
-        added.last().unwrap().body.as_ref().unwrap()["labels"],
-        json!(["prowl:human-approved"])
-    );
+    assert_no_label_writes(&h);
     h.shutdown().await.unwrap();
 }
 
@@ -205,13 +188,7 @@ async fn requesting_changes_needs_a_comment() {
         reviews[0].body.as_ref().unwrap()["event"],
         "REQUEST_CHANGES"
     );
-    let added = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/labels"));
-    assert_eq!(
-        added.last().unwrap().body.as_ref().unwrap()["labels"],
-        json!(["prowl:changes-requested"])
-    );
+    assert_no_label_writes(&h);
     h.shutdown().await.unwrap();
 }
 
@@ -248,13 +225,7 @@ async fn a_review_submitted_on_github_is_noticed_on_the_next_poll() {
     h.client().poll_now().await.unwrap();
 
     assert!(h.client().queue().await.unwrap().is_empty());
-    let added = h
-        .github
-        .requests_to(Method::POST, &format!("/repos/{REPO}/issues/7/labels"));
-    assert_eq!(
-        added.last().unwrap().body.as_ref().unwrap()["labels"],
-        json!(["prowl:human-approved"])
-    );
+    assert_no_label_writes(&h);
     let resolved = events(&h)
         .await
         .into_iter()
