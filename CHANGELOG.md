@@ -6,6 +6,12 @@ All notable changes to PRowl are documented here. The format is based on
 
 ## [Unreleased]
 
+### Removed
+
+- **No more labels**: PRowl no longer creates `prowl:*` labels in repositories or adds them to and
+  removes them from PRs. Reviews, comments and the queue work as before. Labels left by earlier
+  versions stay until removed by hand.
+
 ## [0.1.8] - 2026-10-18
 
 ### Added

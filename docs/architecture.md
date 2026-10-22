@@ -47,7 +47,7 @@ PRowl is a Rust workspace with three crates:
   *agent only* or *needs a human*, plus the reasons. Escalation only.
 - **Publisher** — posts the result to GitHub exactly once (a review with inline notes — a comment,
   or an approval / change request with agent verdicts on — or the findings as review threads plus a "waiting for human approval"
-  comment) and sets the `prowl:agent-reviewed` or `prowl:needs-human` label. Re-reviews of a new
+  comment). It never creates, adds or removes labels. Re-reviews of a new
   commit update PRowl's earlier comment instead of adding more. A finding an existing thread
   already raises (Claude flags it, or a thread near the same line opens with its title) isn't
   posted again; a verification only skips open threads, so what was resolved unfixed comes back.

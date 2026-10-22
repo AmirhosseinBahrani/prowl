@@ -145,26 +145,18 @@ pub fn accept_writes(h: &Harness, n: u64) {
         StatusCode::OK,
         json!({ "id": 900 + n, "html_url": format!("https://github.com/{REPO}/pull/{n}#pullrequestreview-{}", 900 + n) }),
     );
-    h.github.route(
-        Method::POST,
-        &format!("/repos/{REPO}/labels"),
-        StatusCode::CREATED,
-        json!({}),
-    );
-    h.github.route(
-        Method::POST,
-        &format!("/repos/{REPO}/issues/{n}/labels"),
-        StatusCode::OK,
-        json!([]),
-    );
-    for label in ["prowl%3Aneeds-human", "prowl%3Aagent-reviewed"] {
-        h.github.route(
-            Method::DELETE,
-            &format!("/repos/{REPO}/issues/{n}/labels/{label}"),
-            StatusCode::OK,
-            json!([]),
-        );
-    }
+}
+
+/// PRowl never creates, adds or removes labels.
+pub fn assert_no_label_writes(h: &Harness) {
+    let labels: Vec<String> = h
+        .github
+        .writes()
+        .into_iter()
+        .filter(|r| r.path.contains("/labels"))
+        .map(|r| format!("{} {}", r.method, r.path))
+        .collect();
+    assert!(labels.is_empty(), "unexpected label requests: {labels:?}");
 }
 
 fn serve_search(h: &Harness, prs: &[(u64, &PrCommits)]) {

@@ -9,7 +9,6 @@ use crate::auth::{Auth, AuthState};
 use crate::decider::Reason;
 use crate::events::{self, EventBus};
 use crate::github::{GitHub, GitHubError, HumanVerdict};
-use crate::publish::{self, LABEL_CHANGES_REQUESTED, LABEL_HUMAN_APPROVED, LABEL_NEEDS_HUMAN};
 use crate::review::{Finding, ReviewOutput, Severity};
 
 pub mod kind {
@@ -228,7 +227,6 @@ impl Queue {
             self.github
                 .submit_human_review(&token, repo, pr_number, &item.head_sha, verdict, comment)
                 .await?;
-            self.relabel(&token, repo, pr_number, status).await?;
         }
         self.mark(repo, pr_number, status, "app").await?;
         Ok(QueueItem {
@@ -246,8 +244,6 @@ impl Queue {
     ) -> Result<bool, QueueError> {
         match self.pending_item(repo, pr_number).await {
             Ok(_) => {
-                let token = self.token().await?;
-                self.relabel(&token, repo, pr_number, "approved").await?;
                 self.mark(repo, pr_number, "approved", "verified").await?;
                 Ok(true)
             }
@@ -296,31 +292,10 @@ impl Queue {
                 } else {
                     "changes_requested"
                 };
-                self.relabel(&token, &item.repo, item.pr_number, status)
-                    .await?;
                 self.mark(&item.repo, item.pr_number, status, "github")
                     .await?;
             }
         }
-        Ok(())
-    }
-
-    async fn relabel(
-        &self,
-        token: &str,
-        repo: &str,
-        pr_number: u64,
-        status: &str,
-    ) -> Result<(), QueueError> {
-        self.github
-            .remove_label(token, repo, pr_number, LABEL_NEEDS_HUMAN)
-            .await?;
-        let label = if status == "approved" {
-            LABEL_HUMAN_APPROVED
-        } else {
-            LABEL_CHANGES_REQUESTED
-        };
-        publish::add_label(&self.github, token, repo, pr_number, label).await?;
         Ok(())
     }
 
